@@ -55,6 +55,48 @@ class PretrainingDataModule(pl.LightningDataModule):
         )
 
 
+from .mimic_data import ImaGenomeDataModule, MimicCxrFiler, ImaGenomeFiler, GloriaCollateFn
+
+class PretrainingDataModule(pl.LightningDataModule):
+    def __init__(self, cfg):
+        super().__init__()
+
+        self.cfg = cfg
+
+        # TODO: use more of cfg
+
+        mimic_cxr_filer = MimicCxrFiler(
+            download_directory='/scratch/mcinerney.de/mimic-cxr')
+        imagenome_filer = ImaGenomeFiler(
+            download_directory='/scratch/mcinerney.de/imagenome', physio_username=mimic_cxr_filer.username,
+            physio_password=mimic_cxr_filer.password)
+
+        collate_fn = (
+            GloriaCollateFn(cfg, 'train'),
+            GloriaCollateFn(cfg, 'test'),
+            GloriaCollateFn(cfg, 'test')
+        )
+
+        self.dm = ImaGenomeDataModule(
+            mimic_cxr_filer, imagenome_filer, batch_size=self.cfg.train.batch_size,
+            num_workers=self.cfg.train.num_workers, collate_fn=collate_fn,
+            get_images=True, get_reports=True, force=False, parallel=False,
+            num_preprocessing_workers=os.cpu_count(), chunksize=1,
+            split_slices='train,valid,test,gold', gold_test=False)
+
+    def prepare_data(self):
+        self.dm.prepare_data()
+
+    def train_dataloader(self):
+        return self.dm.train_dataloader()
+
+    def val_dataloader(self):
+        return self.dm.val_dataloader()
+
+    def test_dataloader(self):
+        return self.dm.test_dataloader()
+
+
 class CheXpertDataModule(pl.LightningDataModule):
     def __init__(self, cfg):
         super().__init__()
