@@ -55,20 +55,22 @@ class PretrainingDataModule(pl.LightningDataModule):
         )
 
 
-from .mimic_data import ImaGenomeDataModule, MimicCxrFiler, ImaGenomeFiler, GloriaCollateFn
-
-class PretrainingDataModule(pl.LightningDataModule):
+from .mimic_data import ImaGenomeDataModule as IGDM, MimicCxrFiler, ImaGenomeFiler, GloriaCollateFn
+import os
+from getpass import getpass
+class ImaGenomeDataModule(pl.LightningDataModule):
     def __init__(self, cfg):
         super().__init__()
 
         self.cfg = cfg
 
         # TODO: use more of cfg
-
+        username = None if not cfg.data.get_physio_creds else input('physio username: ')
+        password = None if not cfg.data.get_physio_creds else getpass('physio password: ')
         mimic_cxr_filer = MimicCxrFiler(
-            download_directory='/scratch/mcinerney.de/mimic-cxr')
+            download_directory=cfg.data.mimic_cxr_download_directory, physio_username=username, physio_password=password)
         imagenome_filer = ImaGenomeFiler(
-            download_directory='/scratch/mcinerney.de/imagenome', physio_username=mimic_cxr_filer.username,
+            download_directory=cfg.data.imagenome_download_directory, physio_username=mimic_cxr_filer.username,
             physio_password=mimic_cxr_filer.password)
 
         collate_fn = (
@@ -77,12 +79,13 @@ class PretrainingDataModule(pl.LightningDataModule):
             GloriaCollateFn(cfg, 'test')
         )
 
-        self.dm = ImaGenomeDataModule(
+        self.dm = IGDM(
             mimic_cxr_filer, imagenome_filer, batch_size=self.cfg.train.batch_size,
             num_workers=self.cfg.train.num_workers, collate_fn=collate_fn,
             get_images=True, get_reports=True, force=False, parallel=False,
             num_preprocessing_workers=os.cpu_count(), chunksize=1,
-            split_slices='train,valid,test,gold', gold_test=False)
+            split_slices=cfg.data.split_slices, gold_test=cfg.data.gold_test)
+        self.prepare_data()
 
     def prepare_data(self):
         self.dm.prepare_data()

@@ -739,8 +739,9 @@ class ImaGenomeDataModule(BaseDataModule):
                 key = split_slice
                 value = None
             else:
-                key, value = split_slice.split(':')
-                value = slice(*[int(i) for i in value.split('-')])
+                key_values = split_slice.split(':')
+                key = key_values[0]
+                value = slice(*[int(i) for i in key_values[1:]])
             assert key in {'train', 'valid', 'test', 'gold'}
             self.split_slices[key] = value
         self.gold_test = gold_test
@@ -749,6 +750,15 @@ class ImaGenomeDataModule(BaseDataModule):
         return dict(
             records=records, filer=self.mimic_cxr_filer, get_images=self.get_images, get_reports=self.get_reports,
             to_nifti=False, to_pt=True, force_nifti=self.force, force_pt=self.force)
+
+    def yield_args(self, records, subject_ids):
+        for i, subject_id in enumerate(tqdm(subject_ids, total=len(subject_ids))):
+            subject_records = records[records.subject_id == subject_id]
+            kwargs = self.get_kwargs(subject_records)
+            if i == 0:
+                print('Setting one record\'s processing to verbose to serve as an example.')
+                kwargs['verbose'] = True
+            yield kwargs
 
     def prepare_data(self):
         if self.data_prepared:
@@ -768,8 +778,18 @@ class ImaGenomeDataModule(BaseDataModule):
                 assert len(split_df) == len(dicom_ids)
             if v is not None:
                 split_df = split_df.iloc[v]
-            print('Downloading %s (%i):' % (k, len(split_df)))
-            new_records = process_records(**self.get_kwargs(split_df), verbose=True)
+            print('Downloading %s %s (%i):' % (k, str(v), len(split_df)))
+            subject_ids = set(split_df.subject_id)
+            new_records = []
+            for kwargs in self.yield_args(split_df, subject_ids):
+                try:
+                    new_records.append(process_records(**kwargs))
+                except Exception as e:
+                    print(e)
+            new_records = pd.concat(new_records)
+            #new_records = pd.concat(
+            #    [process_records(**kwargs) for kwargs in self.yield_args(split_df, subject_ids)])
+            #new_records = process_records(**self.get_kwargs(split_df), verbose=True)
             new_records.to_csv(self.imagenome_filer.get_full_path('%s_subset.csv' % k))
         self.data_prepared = True
 

@@ -9,10 +9,11 @@ from . import loss
 
 
 def build_data_module(cfg):
-    if cfg.phase.lower() == "pretrain":
-        data_module = datasets.DATA_MODULES["pretrain"]
-    else:
-        data_module = datasets.DATA_MODULES[cfg.data.dataset.lower()]
+    #if cfg.phase.lower() == "pretrain":
+    #    data_module = datasets.DATA_MODULES["pretrain"]
+    #else:
+    #    data_module = datasets.DATA_MODULES[cfg.data.dataset.lower()]
+    data_module = datasets.DATA_MODULES[cfg.data.dataset.lower()]
     return data_module(cfg)
 
 
