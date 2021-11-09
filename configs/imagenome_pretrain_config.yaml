@@ -3,7 +3,7 @@ phase: 'pretrain'
 
 lightning:
     trainer:
-#       gpus: '0'
+       gpus: '0'
        max_epochs: 50
        distributed_backend: 'dp'
        gradient_clip_val: 0.25
@@ -53,11 +53,13 @@ data:
       full_report: false
     image:
       imsize: 256
-    split_slices: 'train:100000:130000'
-    get_physio_creds: true
+    split_slices: 'train:50000,valid:5000'
+    parallel: true
+    get_physio_creds: false
     mimic_cxr_download_directory: '/scratch/mcinerney.de/mimic-cxr'
     imagenome_download_directory: '/scratch/mcinerney.de/imagenome'
-    gold_test: true
+    gold_test: false
+    randomize_reports: true
 
 transforms: 
     norm: 'half'

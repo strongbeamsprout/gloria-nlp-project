@@ -414,7 +414,7 @@ def process_records_mapstyle(kwargs):
 class MimicCxr(Dataset):
     # Not intended for actual use as a dataset, outputs strings
     # Designed to be subclassed by or passed in to the actual dataset
-    def __init__(self, df, filer, group_by='patient'):
+    def __init__(self, df, filer, group_by='patient', randomize_reports=False):
         self.df = df
         self.group_by = group_by
         if self.group_by == 'patient':
@@ -426,6 +426,7 @@ class MimicCxr(Dataset):
         else:
             raise Exception
         self.filer = filer
+        self.randomize_reports = randomize_reports
 
     def __len__(self):
         return len(self.ids)
@@ -447,14 +448,33 @@ class MimicCxr(Dataset):
             if row.study_id not in return_dict[row.subject_id].keys():
                 return_dict[row.subject_id][row.study_id] = {'images': {}}
             return_dict[row.subject_id][row.study_id]['images'][row.dicom_id] = self.filer.get_ptimage(row)
-            return_dict[row.subject_id][row.study_id]['report'] = self.filer.get_report(row)
+            report_row = row if not self.randomize_reports else self.get_negative_row(row, same_study=False)
+            return_dict[row.subject_id][row.study_id]['report'] = self.filer.get_report(report_row)
         return return_dict
+
+    def get_negative_row(self, row, same_study=None, same_patient=None):
+        neg_rows = self.df[self.df.dicom_id != row.dicom_id]
+        if same_study is not None:
+            if same_study:
+                assert same_patient is None
+                temp_neg_rows = neg_rows[neg_rows.study_id == row.study_id]
+                neg_rows = temp_neg_rows if len(temp_neg_rows) > 0 else neg_rows
+            else:
+                neg_rows = neg_rows[neg_rows.study_id != row.study_id]
+        if same_patient is not None:
+            if same_patient:
+                temp_neg_rows = neg_rows[neg_rows.subject_id == row.subject_id]
+                neg_rows = temp_neg_rows if len(temp_neg_rows) > 0 else neg_rows
+            else:
+                neg_rows = neg_rows[neg_rows.subject_id != row.subject_id]
+        return neg_rows.sample().iloc[0]
 
 
 class MimicCxrDataModule(BaseDataModule):
     def __init__(self, filer, get_images=True, get_reports=True, splits=(.8, .1), batch_size=1, num_workers=0,
                  dataslice=None, collate_fn=default_collate_fn, greater_than_n_studies=0, force=False, registration=None,
-                 parallel=False, num_preprocessing_workers=os.cpu_count(), chunksize=1, chexpert_labeler=None):
+                 parallel=False, num_preprocessing_workers=os.cpu_count(), chunksize=1, chexpert_labeler=None,
+                 randomize_reports=False):
         super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn)
         self.filer = filer
         self.get_images = get_images
@@ -469,6 +489,7 @@ class MimicCxrDataModule(BaseDataModule):
         self.chunksize = chunksize
         self.chexpert_labeler = chexpert_labeler
         self.data_prepared = False
+        self.randomize_reports = randomize_reports
 
     def get_kwargs(self, records):
         return dict(records=records, filer=self.filer, get_images=self.get_images, get_reports=self.get_reports,
@@ -532,7 +553,7 @@ class MimicCxrDataModule(BaseDataModule):
         self.data_prepared = True
 
     def get_dataset(self, records_df):
-        return MimicCxr(records_df, self.filer)
+        return MimicCxr(records_df, self.filer, randomize_reports=self.randomize_reports)
 
     @staticmethod
     def split_subjects(records, frac, generator=default_generator):
@@ -646,8 +667,8 @@ class ImaGenomeFiler:
 
 
 class ImaGenomeDataset(MimicCxr):
-    def __init__(self, df, mimic_cxr_filer, imagenome_filer, group_by='patient', gold=False):
-        super().__init__(df, mimic_cxr_filer, group_by=group_by)
+    def __init__(self, df, mimic_cxr_filer, imagenome_filer, group_by='patient', gold=False, randomize_reports=False):
+        super().__init__(df, mimic_cxr_filer, group_by=group_by, randomize_reports=randomize_reports)
         self.imagenome_filer = imagenome_filer
         self.gold = gold
         if self.gold:
@@ -686,7 +707,7 @@ class ImaGenomeDataset(MimicCxr):
                 bbox_info['labels'].append(row.label_name)
                 bbox_info['contexts'].append(row.context)
         else:
-            scene_graph = self.imagenome_filer.get_silver_scene_graph_json(dicom_id)
+#             scene_graph = self.imagenome_filer.get_silver_scene_graph_json(dicom_id)
 #             raise NotImplementedError
             objects = None
         return objects
@@ -722,7 +743,8 @@ class ImaGenomeDataset(MimicCxr):
 class ImaGenomeDataModule(BaseDataModule):
     def __init__(self, mimic_cxr_filer, imagenome_filer, batch_size=1, num_workers=0, collate_fn=default_collate_fn,
                  get_images=True, get_reports=True, force=False, parallel=False,
-                 num_preprocessing_workers=os.cpu_count(), chunksize=1, split_slices='train,valid,test,gold', gold_test=False):
+                 num_preprocessing_workers=os.cpu_count(), chunksize=1, split_slices='train,valid,test,gold', gold_test=False,
+                 randomize_reports=False):
         super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn)
         self.mimic_cxr_filer = mimic_cxr_filer
         self.imagenome_filer = imagenome_filer
@@ -745,6 +767,7 @@ class ImaGenomeDataModule(BaseDataModule):
             assert key in {'train', 'valid', 'test', 'gold'}
             self.split_slices[key] = value
         self.gold_test = gold_test
+        self.randomize_reports = randomize_reports
 
     def get_kwargs(self, records):
         return dict(
@@ -759,6 +782,35 @@ class ImaGenomeDataModule(BaseDataModule):
                 print('Setting one record\'s processing to verbose to serve as an example.')
                 kwargs['verbose'] = True
             yield kwargs
+
+    def process_records(self, records, subject_ids):
+        if not self.parallel:
+                print('not parallelizing')
+                # no parallel:
+                records = pd.concat(
+                    [process_records(**kwargs) for kwargs in self.yield_args(records, subject_ids)])
+        else:
+            print('parallelizing')
+            failed = True
+            if self.mimic_cxr_filer.password is None:
+                self.mimic_cxr_filer.password = ''
+            while failed:
+                try:
+                    # parallel:
+                    P = mp.Pool
+                    with P(self.num_preprocessing_workers) as p:
+                        print('starting processes:')
+                        results_iterable = p.imap(
+                            process_records_mapstyle,
+                            list(self.yield_args(records, subject_ids)),
+                            chunksize=self.chunksize
+                        )
+                        print('finishing processes:')
+                        records = pd.concat([rs for rs in tqdm(results_iterable, total=len(subject_ids))])
+                    failed = False
+                except DownloadError:
+                    self.mimic_cxr_filer.password = getpass('Please enter physio password: ')
+        return records
 
     def prepare_data(self):
         if self.data_prepared:
@@ -780,13 +832,14 @@ class ImaGenomeDataModule(BaseDataModule):
                 split_df = split_df.iloc[v]
             print('Downloading %s %s (%i):' % (k, str(v), len(split_df)))
             subject_ids = set(split_df.subject_id)
-            new_records = []
-            for kwargs in self.yield_args(split_df, subject_ids):
-                try:
-                    new_records.append(process_records(**kwargs))
-                except Exception as e:
-                    print(e)
-            new_records = pd.concat(new_records)
+            new_records = self.process_records(split_df, subject_ids)
+            #new_records = []
+            #for kwargs in self.yield_args(split_df, subject_ids):
+            #    try:
+            #        new_records.append(process_records(**kwargs))
+            #    except Exception as e:
+            #        print(e)
+            #new_records = pd.concat(new_records)
             #new_records = pd.concat(
             #    [process_records(**kwargs) for kwargs in self.yield_args(split_df, subject_ids)])
             #new_records = process_records(**self.get_kwargs(split_df), verbose=True)
@@ -799,7 +852,8 @@ class ImaGenomeDataModule(BaseDataModule):
 #         if v is not None:
 #             split_df = split_df[v]
         split_df = pd.read_csv(self.imagenome_filer.get_full_path('%s_subset.csv' % split))
-        return ImaGenomeDataset(split_df, self.mimic_cxr_filer, self.imagenome_filer, gold=split=='gold', group_by='image')
+        return ImaGenomeDataset(split_df, self.mimic_cxr_filer, self.imagenome_filer, gold=split=='gold', group_by='image',
+                                randomize_reports=self.randomize_reports)
 
     def setup(self, stage=None):
         if stage == 'fit' or stage is None:

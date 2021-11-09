@@ -66,14 +66,16 @@ def main(cfg, args):
     model = gloria.builder.build_lightning_model(cfg, dm)
 
     # callbacks
-    callbacks = [LearningRateMonitor(logging_interval="step")]
+    callbacks = []
+    if "logger" in cfg.lightning:
+        callbacks.append(LearningRateMonitor(logging_interval="step"))
     if "checkpoint_callback" in cfg.lightning:
         checkpoint_callback = ModelCheckpoint(**cfg.lightning.checkpoint_callback)
         callbacks.append(checkpoint_callback)
     if "early_stopping_callback" in cfg.lightning:
         early_stopping_callback = EarlyStopping(**cfg.lightning.early_stopping_callback)
         callbacks.append(early_stopping_callback)
-    if cfg.train.scheduler is not None:
+    if "logger" in cfg.lightning and cfg.train.scheduler is not None:
         lr_monitor = LearningRateMonitor(logging_interval="step")
         callbacks.append(lr_monitor)
 
@@ -152,8 +154,10 @@ if __name__ == "__main__":
         )
 
         # create directories
-        if not os.path.exists(cfg.lightning.logger.save_dir):
-            os.makedirs(cfg.lightning.logger.save_dir)
+
+        if "logger" in cfg.lightning:
+            if not os.path.exists(cfg.lightning.logger.save_dir):
+                os.makedirs(cfg.lightning.logger.save_dir)
         if not os.path.exists(cfg.lightning.checkpoint_callback.dirpath):
             os.makedirs(cfg.lightning.checkpoint_callback.dirpath)
         if not os.path.exists(cfg.output_dir):
