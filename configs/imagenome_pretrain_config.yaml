@@ -53,7 +53,7 @@ data:
       full_report: false
     image:
       imsize: 256
-    split_slices: 'train:50000,valid:5000'
+    split_slices: 'train,valid'
     parallel: true
     get_physio_creds: false
     mimic_cxr_download_directory: '/scratch/mcinerney.de/mimic-cxr'

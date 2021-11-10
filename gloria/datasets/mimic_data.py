@@ -24,14 +24,16 @@ def default_collate_fn(instances):
 
 
 class BaseDataModule(pl.LightningDataModule):
-    def __init__(self, batch_size=1, num_workers=0, collate_fn=default_collate_fn):
+    def __init__(self, batch_size=1, num_workers=0, collate_fn=default_collate_fn, **kwargs):
         super().__init__()
         for i, split in enumerate(['train', 'val', 'test']):
-            setattr(self, '%s_dataloader_kwargs' % split, dict(
+            dataloader_kwargs = dict(
                 batch_size=batch_size,
                 num_workers=num_workers,
                 collate_fn=collate_fn[i] if isinstance(collate_fn, tuple) else collate_fn
-            ))
+            )
+            dataloader_kwargs.update(kwargs)
+            setattr(self, '%s_dataloader_kwargs' % split, dataloader_kwargs)
         self._train = None
         self._val = None
         self._test = None
@@ -474,8 +476,8 @@ class MimicCxrDataModule(BaseDataModule):
     def __init__(self, filer, get_images=True, get_reports=True, splits=(.8, .1), batch_size=1, num_workers=0,
                  dataslice=None, collate_fn=default_collate_fn, greater_than_n_studies=0, force=False, registration=None,
                  parallel=False, num_preprocessing_workers=os.cpu_count(), chunksize=1, chexpert_labeler=None,
-                 randomize_reports=False):
-        super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn)
+                 randomize_reports=False, **kwargs):
+        super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn, **kwargs)
         self.filer = filer
         self.get_images = get_images
         self.get_reports = get_reports
@@ -744,8 +746,8 @@ class ImaGenomeDataModule(BaseDataModule):
     def __init__(self, mimic_cxr_filer, imagenome_filer, batch_size=1, num_workers=0, collate_fn=default_collate_fn,
                  get_images=True, get_reports=True, force=False, parallel=False,
                  num_preprocessing_workers=os.cpu_count(), chunksize=1, split_slices='train,valid,test,gold', gold_test=False,
-                 randomize_reports=False):
-        super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn)
+                 randomize_reports=False, **kwargs):
+        super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn, **kwargs)
         self.mimic_cxr_filer = mimic_cxr_filer
         self.imagenome_filer = imagenome_filer
         self.get_images = get_images
@@ -864,124 +866,3 @@ class ImaGenomeDataModule(BaseDataModule):
                 self._test = self.get_dataset('gold')
             else:
                 self._test = self.get_dataset('test')
-
-
-from transformers import AutoTokenizer
-import cv2
-from PIL import Image
-from gloria import builder
-
-
-def original_tensor_to_numpy_image(image):
-    return np.array((image.float() / image.max()) * 255, dtype=np.uint8)
-
-
-class GloriaCollateFn:
-    def __init__(self, cfg, split):
-        self.cfg = cfg
-        self.tokenizer = AutoTokenizer.from_pretrained(self.cfg.model.text.bert_type)
-        self.transform = builder.build_transformation(self.cfg, split)
-
-    def __call__(self, instances):
-        imgs, cap_len, ids, tokens, attention, path = [], [], [], [], [], []
-
-        # flattern
-        for instance in instances:
-            patient_id = next(iter(instance.keys()))
-            study_id = next(iter(instance[patient_id].keys()))
-            instance = instance[patient_id][study_id]
-            dicom_id = next(iter(instance['images'].keys()))
-
-            # get image
-            # x = cv2.imread(str(img_path), 0)
-            x = original_tensor_to_numpy_image(instance['images'][dicom_id])
-            # tranform images
-            x = self._resize_img(x, self.cfg.data.image.imsize)
-            img = Image.fromarray(x).convert("RGB")
-            if self.transform is not None:
-                img = self.transform(img)
-            imgs.append(img)
-            # get caption
-            cap = self.tokenizer(
-                instance['report'],
-                return_tensors="pt",
-                truncation=True,
-                padding="max_length",
-                max_length=self.cfg.data.text.word_num,
-            )
-            x_len = len([t for t in cap["input_ids"][0] if t != 0])
-            ids.append(cap["input_ids"])
-            cap_len.append(x_len)
-            tokens.append(cap["token_type_ids"])
-            attention.append(cap["attention_mask"])
-
-        # stack
-        imgs = torch.stack(imgs)
-        ids = torch.stack(ids).squeeze()
-        tokens = torch.stack(tokens).squeeze()
-        attention = torch.stack(attention).squeeze()
-
-        # sort and add to dictionary
-        sorted_cap_lens, sorted_cap_indices = torch.sort(torch.tensor(cap_len), 0, True)
-        return_dict = {
-            "caption_ids": ids[sorted_cap_indices],
-            "token_type_ids": tokens[sorted_cap_indices],
-            "attention_mask": attention[sorted_cap_indices],
-            "imgs": imgs[sorted_cap_indices],
-            "cap_lens": sorted_cap_lens,
-        }
-
-        return return_dict
-
-    def _resize_img(self, img, scale):
-        """
-        Args:
-            img - image as numpy array (cv2)
-            scale - desired output image-size as scale x scale
-        Return:
-            image resized to scale x scale with shortest dimension 0-padded
-        """
-        size = img.shape
-        max_dim = max(size)
-        max_ind = size.index(max_dim)
-
-        # Resizing
-        if max_ind == 0:
-            # image is heigher
-            wpercent = scale / float(size[0])
-            hsize = int((float(size[1]) * float(wpercent)))
-            desireable_size = (scale, hsize)
-        else:
-            # image is wider
-            hpercent = scale / float(size[1])
-            wsize = int((float(size[0]) * float(hpercent)))
-            desireable_size = (wsize, scale)
-        resized_img = cv2.resize(
-            img, desireable_size[::-1], interpolation=cv2.INTER_AREA
-        )  # this flips the desireable_size vector
-
-        # Padding
-        if max_ind == 0:
-            # height fixed at scale, pad the width
-            pad_size = scale - resized_img.shape[1]
-            left = int(np.floor(pad_size / 2))
-            right = int(np.ceil(pad_size / 2))
-            top = int(0)
-            bottom = int(0)
-        else:
-            # width fixed at scale, pad the height
-            pad_size = scale - resized_img.shape[0]
-            top = int(np.floor(pad_size / 2))
-            bottom = int(np.ceil(pad_size / 2))
-            left = int(0)
-            right = int(0)
-        resized_img = np.pad(
-            resized_img, [(top, bottom), (left, right)], "constant", constant_values=0
-        )
-
-        return resized_img
-
-
-def normalize(image):
-    image = image.float()
-    return ((image - image.min()) / (image.max() - image.min()))

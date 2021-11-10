@@ -55,7 +55,8 @@ class PretrainingDataModule(pl.LightningDataModule):
         )
 
 
-from .mimic_data import ImaGenomeDataModule as IGDM, MimicCxrFiler, ImaGenomeFiler, GloriaCollateFn
+from .mimic_data import ImaGenomeDataModule as IGDM, MimicCxrFiler, ImaGenomeFiler
+from .mimic_for_gloria import GloriaCollateFn
 import os
 from getpass import getpass
 class ImaGenomeDataModule(pl.LightningDataModule):
@@ -84,7 +85,8 @@ class ImaGenomeDataModule(pl.LightningDataModule):
             num_workers=self.cfg.train.num_workers, collate_fn=collate_fn,
             get_images=True, get_reports=True, force=False, parallel=cfg.data.parallel,
             num_preprocessing_workers=os.cpu_count(), chunksize=1,
-            split_slices=cfg.data.split_slices, gold_test=cfg.data.gold_test, randomize_reports=cfg.data.randomize_reports)
+            split_slices=cfg.data.split_slices, gold_test=cfg.data.gold_test, randomize_reports=cfg.data.randomize_reports,
+            drop_last=True, pin_memory=True)
         self.prepare_data()
 
     def prepare_data(self):
