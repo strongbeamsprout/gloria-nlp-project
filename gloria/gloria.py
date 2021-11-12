@@ -78,7 +78,7 @@ def load_gloria(
             + " and copy it to the ./pretrained folder."
         )
 
-    ckpt = torch.load(ckpt_path)
+    ckpt = torch.load(ckpt_path, map_location=device)
     cfg = ckpt["hyper_parameters"]
     ckpt_dict = ckpt["state_dict"]
 

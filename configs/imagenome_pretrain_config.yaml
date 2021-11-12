@@ -11,7 +11,7 @@ lightning:
        precision: 16
     checkpoint_callback:
         monitor: 'val_loss'
-        dirpath: './data/ckpt'
+        dirpath: '/scratch/mcinerney.de/gloria_outputs/ckpt'
         save_last: true 
         mode: min
         save_top_k: 10
@@ -23,7 +23,7 @@ lightning:
         mode: 'min'
     logger:
         logger_type: 'WandbLogger'
-        save_dir: './data/'
+        save_dir: '/scratch/mcinerney.de/gloria_outputs/'
         project: 'gloria_v2'
 
 model: 
