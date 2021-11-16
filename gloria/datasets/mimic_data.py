@@ -669,12 +669,47 @@ class ImaGenomeFiler:
 
 
 class ImaGenomeDataset(MimicCxr):
-    def __init__(self, df, mimic_cxr_filer, imagenome_filer, group_by='patient', gold=False, randomize_reports=False):
+    def __init__(self, df, mimic_cxr_filer, imagenome_filer, group_by='patient', gold=False, randomize_reports=False,
+                 shuffle_sentence_labels=False, random_sentence_labels=False):
         super().__init__(df, mimic_cxr_filer, group_by=group_by, randomize_reports=randomize_reports)
         self.imagenome_filer = imagenome_filer
         self.gold = gold
         if self.gold:
             self.gold_objects_df = self.imagenome_filer.get_gold_file('gold_object_attribute_with_coordinates.txt')
+        self.shuffle_sentence_labels = shuffle_sentence_labels
+        self.random_sentence_labels = random_sentence_labels
+        if self.shuffle_sentence_labels:
+            assert not self.random_sentence_labels
+
+    def randomize_sentence_labels_func(self, objects, random_labels=None):
+        if random_labels is None:
+            values = list(objects['sent_to_bboxes'].values())
+            random.shuffle(values)
+        else:
+            values = random_labels
+        keys = list(objects['sent_to_bboxes'].keys())
+        new_objects = {k: v if k not in ['sent_to_bboxes', 'bbox_to_sents'] else {} for k, v in objects.items()}
+        new_objects['shuffled'] = True
+        for sentence_id, v in zip(keys, values):
+            sentence = objects['sent_to_bboxes'][sentence_id]['sentence']
+            v['sentence'] = sentence
+            new_objects['sent_to_bboxes'][sentence_id] = v
+            for bbox, coord_original, label, context in zip(
+                    v['bboxes'], v['coords_original'], v['labels'], v['contexts']):
+                if bbox not in new_objects['bbox_to_sents'].keys():
+                    new_objects['bbox_to_sents'][bbox] = {
+                        'coord_original': coord_original,
+                        'sentence_ids': [],
+                        'sentences': [],
+                        'labels': [],
+                        'contexts': [],
+                    }
+                sent_info = new_objects['bbox_to_sents'][bbox]
+                sent_info['sentence_ids'].append(sentence_id)
+                sent_info['sentences'].append(sentence)
+                sent_info['labels'].append(label)
+                sent_info['contexts'].append(context)
+        return new_objects
 
     def get_objects(self, dicom_id):
         if self.gold:
@@ -685,13 +720,13 @@ class ImaGenomeDataset(MimicCxr):
                 if row.bbox not in objects['bbox_to_sents'].keys():
                     objects['bbox_to_sents'][row.bbox] = {
                         'coord_original': coord_original,
-                        'row_ids': [],
+                        'sentence_ids': [],
                         'sentences': [],
                         'labels': [],
                         'contexts': [],
                     }
                 sent_info = objects['bbox_to_sents'][row.bbox]
-                sent_info['row_ids'].append(row.row_id)
+                sent_info['sentence_ids'].append(row.row_id)
                 sent_info['sentences'].append(row.sentence)
                 sent_info['labels'].append(row.label_name)
                 sent_info['contexts'].append(row.context)
@@ -709,9 +744,45 @@ class ImaGenomeDataset(MimicCxr):
                 bbox_info['labels'].append(row.label_name)
                 bbox_info['contexts'].append(row.context)
         else:
-#             scene_graph = self.imagenome_filer.get_silver_scene_graph_json(dicom_id)
-#             raise NotImplementedError
-            objects = None
+            scene_graph = self.imagenome_filer.get_silver_scene_graph_json(dicom_id)
+            objects = {'original_scene_graph': scene_graph, 'bbox_to_sents': {}, 'sent_to_bboxes': {}}
+            temp_objects = {obj['object_id']: obj for obj in scene_graph['objects']}
+            for bbox_attributes in scene_graph['attributes']:
+                if bbox_attributes['object_id'] not in temp_objects.keys():
+                    continue
+                obj = temp_objects[bbox_attributes['object_id']]
+                for sentence_id, sentence, sentence_attributes in zip(
+                        bbox_attributes['phrase_IDs'], bbox_attributes['phrases'], bbox_attributes['attributes']):
+                    coord_original = [
+                        obj['original_x1'], obj['original_y1'], obj['original_x2'], obj['original_x2']]
+                    for attribute in sentence_attributes:
+                        _, context, label = attribute.split('|')
+                        if obj['bbox_name'] not in objects['bbox_to_sents'].keys():
+                            objects['bbox_to_sents'][obj['bbox_name']] = {
+                                'coord_original': coord_original,
+                                'sentence_ids': [],
+                                'sentences': [],
+                                'labels': [],
+                                'contexts': [],
+                            }
+                        sent_info = objects['bbox_to_sents'][obj['bbox_name']]
+                        sent_info['sentence_ids'].append(sentence_id)
+                        sent_info['sentences'].append(sentence)
+                        sent_info['labels'].append(label)
+                        sent_info['contexts'].append(context)
+                        if sentence_id not in objects['sent_to_bboxes'].keys():
+                            objects['sent_to_bboxes'][sentence_id] = {
+                                'sentence': sentence,
+                                'bboxes': [],
+                                'coords_original': [],
+                                'labels': [],
+                                'contexts': [],
+                            }
+                        bbox_info = objects['sent_to_bboxes'][sentence_id]
+                        bbox_info['bboxes'].append(obj['bbox_name'])
+                        bbox_info['coords_original'].append(coord_original)
+                        bbox_info['labels'].append(label)
+                        bbox_info['contexts'].append(context)
         return objects
 
     def __getitem__(self, item):
@@ -738,7 +809,21 @@ class ImaGenomeDataset(MimicCxr):
         return_dict = super().__getitem__(item)
         for subject_id, v1 in return_dict.items():
             for study_id, v2 in v1.items():
-                v2['objects'] = {dicom_id: self.get_objects(dicom_id) for dicom_id, v3 in v2['images'].items()}
+                objects = {}
+                for dicom_id, v3 in v2['images'].items():
+                    image_objects = self.get_objects(dicom_id)
+                    if self.shuffle_sentence_labels:
+                        image_objects = self.randomize_sentence_labels_func(image_objects)
+                    elif self.random_sentence_labels:
+                        neg_labels = []
+                        while len(neg_labels) < len(image_objects['sent_to_bboxes']):
+                            neg_row = self.get_negative_row(self.df[self.df.dicom_id == dicom_id].iloc[0])
+                            neg_objects = self.get_objects(neg_row.dicom_id)
+                            neg_labels += list(neg_objects['sent_to_bboxes'].values())
+                        neg_labels = neg_labels[:len(image_objects['sent_to_bboxes'])]
+                        image_objects = self.randomize_sentence_labels_func(image_objects, random_labels=neg_labels)
+                    objects[dicom_id] = image_objects
+                v2['objects'] = objects
         return return_dict
 
 
@@ -746,7 +831,7 @@ class ImaGenomeDataModule(BaseDataModule):
     def __init__(self, mimic_cxr_filer, imagenome_filer, batch_size=1, num_workers=0, collate_fn=default_collate_fn,
                  get_images=True, get_reports=True, force=False, parallel=False,
                  num_preprocessing_workers=os.cpu_count(), chunksize=1, split_slices='train,valid,test,gold', gold_test=False,
-                 randomize_reports=False, **kwargs):
+                 randomize_reports=False, shuffle_sentence_labels=False, random_sentence_labels=False, **kwargs):
         super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn, **kwargs)
         self.mimic_cxr_filer = mimic_cxr_filer
         self.imagenome_filer = imagenome_filer
@@ -770,6 +855,8 @@ class ImaGenomeDataModule(BaseDataModule):
             self.split_slices[key] = value
         self.gold_test = gold_test
         self.randomize_reports = randomize_reports
+        self.shuffle_sentence_labels = shuffle_sentence_labels
+        self.random_sentence_labels = random_sentence_labels
 
     def get_kwargs(self, records):
         return dict(
@@ -848,14 +935,16 @@ class ImaGenomeDataModule(BaseDataModule):
             new_records.to_csv(self.imagenome_filer.get_full_path('%s_subset.csv' % k))
         self.data_prepared = True
 
-    def get_dataset(self, split):
-#         split_df = self.imagenome_filer.get_split(split)
-#         v = self.split_slices[split]
-#         if v is not None:
-#             split_df = split_df[v]
+    def get_dataset(self, split, **kwargs):
+        if 'randomize_reports' not in kwargs.keys():
+            kwargs['randomize_reports'] = self.randomize_reports
+        if 'shuffle_sentence_labels' not in kwargs.keys():
+            kwargs['shuffle_sentence_labels'] = self.shuffle_sentence_labels
+        if 'random_sentence_labels' not in kwargs.keys():
+            kwargs['random_sentence_labels'] = self.random_sentence_labels
         split_df = pd.read_csv(self.imagenome_filer.get_full_path('%s_subset.csv' % split))
-        return ImaGenomeDataset(split_df, self.mimic_cxr_filer, self.imagenome_filer, gold=split=='gold', group_by='image',
-                                randomize_reports=self.randomize_reports)
+        return ImaGenomeDataset(
+            split_df, self.mimic_cxr_filer, self.imagenome_filer, gold=split=='gold', group_by='image', **kwargs)
 
     def setup(self, stage=None):
         if stage == 'fit' or stage is None:
@@ -866,3 +955,22 @@ class ImaGenomeDataModule(BaseDataModule):
                 self._test = self.get_dataset('gold')
             else:
                 self._test = self.get_dataset('test')
+
+
+def bbox_to_mask(bbox, image_shape):
+    image1 = torch.zeros(image_shape, dtype=torch.bool)
+    image1[bbox[1]:, bbox[0]:] = 1
+    image2 = torch.zeros(image_shape, dtype=torch.bool)
+    image2[:bbox[3] + 1, :bbox[2] + 1] = 1
+    box_mask = image1 & image2
+    return box_mask
+
+
+def mask_to_bbox(box_mask):
+    if box_mask.sum() == 0:
+        return [-1, -1, -1, -1]
+    indices0 = torch.arange(box_mask.shape[0])
+    indices1 = torch.arange(box_mask.shape[1])
+    indices0 = indices0.unsqueeze(1).expand(*box_mask.shape)[box_mask]
+    indices1 = indices1.unsqueeze(0).expand(*box_mask.shape)[box_mask]
+    return [indices1.min().item(), indices0.min().item(), indices1.max().item(), indices0.max().item()]

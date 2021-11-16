@@ -25,6 +25,7 @@ class GLoRIA(nn.Module):
         self.global_loss = loss.gloria_loss.global_loss
         self.local_loss_weight = self.cfg.model.gloria.local_loss_weight
         self.global_loss_weight = self.cfg.model.gloria.global_loss_weight
+        self.attention_loss_weight = self.cfg.model.gloria.attention_loss_weight
 
         self.temp1 = self.cfg.model.gloria.temp1
         self.temp2 = self.cfg.model.gloria.temp2
@@ -67,7 +68,10 @@ class GLoRIA(nn.Module):
         g_loss0, g_loss1 = self.global_loss(img_emb_g, text_emb_g, temp3=self.temp3)
         return g_loss0, g_loss1
 
-    def calc_loss(self, img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents):
+    def _calc_attn_loss(attn_maps, attn_labels):
+        raise NotImplementedError
+
+    def calc_loss(self, img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents, attn_labels=None):
 
         l_loss0, l_loss1, attn_maps = self._calc_local_loss(
             img_emb_l, text_emb_l, sents
@@ -78,6 +82,9 @@ class GLoRIA(nn.Module):
         loss = 0
         loss += (l_loss0 + l_loss1) * self.local_loss_weight
         loss += (g_loss0 + g_loss1) * self.global_loss_weight
+        if self.attn_loss_weight is not None:
+            assert attn_label is not None
+            loss += self._calc_attn_loss(attn_maps, attn_labels) * self.attn_loss_weight
 
         return loss, attn_maps
 

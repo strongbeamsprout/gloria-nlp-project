@@ -19,18 +19,20 @@ def original_tensor_to_numpy_image(image):
 
 
 class GloriaCollateFn:
-    def __init__(self, cfg, split, device='cpu'):
+    def __init__(self, cfg, split, device='cpu', include_objects=True):
         self.cfg = cfg
         self.tokenizer = AutoTokenizer.from_pretrained(self.cfg.model.text.bert_type)
         self.transform = builder.build_transformation(self.cfg, split)
         self.split = split
         self.device = device
         self.ixtoword = {v: k for k, v in self.tokenizer.get_vocab().items()}
+        self.include_objects = include_objects
 
     def __call__(self, instances):
         imgs, cap_len, ids, tokens, attention, path = [], [], [], [], [], []
         # flattern
         captions, images = [], []
+        objects = [] if self.include_objects else None
         for instance in instances:
             patient_id = next(iter(instance.keys()))
             study_id = next(iter(instance[patient_id].keys()))
@@ -39,22 +41,19 @@ class GloriaCollateFn:
             x = original_tensor_to_numpy_image(instance['images'][dicom_id])
             images.append(x)
             captions.append(instance['report'])
-        return self.get_batch(images, captions)
+            if self.include_objects:
+                objects.append(instance['objects'])
+        return self.get_batch(images, captions, objects=objects)
     
-    def get_batch(self, images, captions):
+    def get_batch(self, images, captions, objects=None):
         imgs = self.process_img(images, self.device)
-        cap_return_dict = self.process_text(captions, self.device)
+        cap_return_dict = self.process_text(captions, self.device, objects=objects)
 
         # sort and add to dictionary
         sorted_cap_lens, sorted_cap_indices = torch.sort(torch.tensor(cap_return_dict["cap_lens"]), 0, True)
         sorted_cap_lens, sorted_cap_indices = sorted_cap_lens.to(self.device), sorted_cap_indices.to(self.device)
-        return_dict = {
-            "caption_ids": cap_return_dict["caption_ids"][sorted_cap_indices],
-            "token_type_ids": cap_return_dict["token_type_ids"][sorted_cap_indices],
-            "attention_mask": cap_return_dict["attention_mask"][sorted_cap_indices],
-            "imgs": imgs[sorted_cap_indices],
-            "cap_lens": sorted_cap_lens,
-        }
+        return_dict = {k: v[sorted_cap_indices] for k, v in cap_return_dict.items()}
+        return_dict["imgs"] = imgs[sorted_cap_indices]
         return return_dict
 
     # almost completely copied from gloria method
@@ -122,10 +121,9 @@ class GloriaCollateFn:
         return resized_img
 
     # almost completely copied from gloria method
-    def process_text(self, text, device):
-
-        if type(text) == str:
-            text = [text]
+    def process_text(self, text, device, objects=None):
+        if objects is not None:
+            raise NotImplementedError
 
         processed_text_tensors = []
         for t in text:
@@ -154,6 +152,7 @@ class GloriaCollateFn:
                     if len(t) > 0:
                         included_tokens.append(t)
                 all_sents.append(" ".join(included_tokens))
+
             if self.cfg.data.text.full_report is True:
                 t = " ".join(all_sents)
             else:
