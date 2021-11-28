@@ -83,7 +83,7 @@ class ImaGenomeDataModule(pl.LightningDataModule):
         self.dm = IGDM(
             mimic_cxr_filer, imagenome_filer, batch_size=self.cfg.train.batch_size,
             num_workers=self.cfg.train.num_workers, collate_fn=collate_fn,
-            get_images=True, get_reports=True, force=False, parallel=cfg.data.parallel,
+            get_images=True, get_reports=True, force=False, parallel=self.cfg.data.parallel,
             num_preprocessing_workers=os.cpu_count(), chunksize=1,
             split_slices=cfg.data.split_slices, gold_test=cfg.data.gold_test, randomize_reports=cfg.data.randomize_reports,
             drop_last=True, pin_memory=True)

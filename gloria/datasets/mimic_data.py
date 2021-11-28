@@ -1,6 +1,6 @@
 import torch
 from torch import default_generator
-from torch.utils.data import Dataset, random_split, DataLoader
+from torch.utils.data import Dataset, random_split, DataLoader, WeightedRandomSampler
 from getpass import getpass
 import subprocess
 import pandas as pd
@@ -34,9 +34,14 @@ class BaseDataModule(pl.LightningDataModule):
             )
             dataloader_kwargs.update(kwargs)
             setattr(self, '%s_dataloader_kwargs' % split, dataloader_kwargs)
+        self.train_dataloader_kwargs['shuffle'] = True
         self._train = None
         self._val = None
         self._test = None
+
+    def weight_instances(self, weights, split='train'):
+        dataloader_kwargs = getattr(self, '%s_dataloader_kwargs' % split)
+        dataloader_kwargs['sampler'] = WeightedRandomSampler(weights, len(weights))
 
     @property
     def train(self):
@@ -57,7 +62,7 @@ class BaseDataModule(pl.LightningDataModule):
         return self._test
 
     def train_dataloader(self):
-        return DataLoader(self.train, shuffle=False, **self.train_dataloader_kwargs)
+        return DataLoader(self.train, **self.train_dataloader_kwargs)
 
     def val_dataloader(self):
         return DataLoader(self.val, **self.val_dataloader_kwargs)
@@ -186,15 +191,21 @@ class MimicCxrFiler:
 
     def save_ptimage_from_dicom(self, row, remove=True, force=False, process_function=None):
         if force or not os.path.exists(self.get_ptimage_path(row)):
-            self.save_dicom(row)
-            try:
-                image = np.array(pydicom.dcmread(self.get_dicom_path(row)).pixel_array, dtype=np.int16)
-            except Exception as e:
-                print('error with dicom path:', self.get_dicom_path(row))
-                e.load_error_file_path = self.get_dicom_path(row)
-                # print('deleting')
-                # subprocess.run(['rm', self.get_dicom_path(row)])
-                raise e
+            tries = 0
+            while True:
+                try:
+                    tries += 1
+                    self.save_dicom(row)
+                    image = np.array(pydicom.dcmread(self.get_dicom_path(row)).pixel_array, dtype=np.int16)
+                    break
+                except Exception as e:
+                    print('error with dicom path:', self.get_dicom_path(row))
+                    e.load_error_file_path = self.get_dicom_path(row)
+                    if isinstance(e, ValueError) and tries == 1:
+                        print('deleting')
+                        subprocess.run(['rm', self.get_dicom_path(row)])
+                    else:
+                        raise e
             if remove and os.path.exists(self.get_dicom_path(row)):
                 subprocess.call(['rm', self.get_dicom_path(row)])
             self.save_ptimage(row, image, process_function=process_function)
@@ -432,19 +443,10 @@ class MimicCxr(Dataset):
 
     def __len__(self):
         return len(self.ids)
-
-    def __getitem__(self, item):
-        id = self.ids[item]
-        if self.group_by == 'patient':
-            rows = self.df[self.df.subject_id == id].iterrows()
-        elif self.group_by == 'study':
-            rows = self.df[self.df.study_id == id].iterrows()
-        elif self.group_by == 'image':
-            rows = self.df[self.df.dicom_id == id].iterrows()
-        else:
-            raise Exception
+    
+    def get_item_from_rows(self, rows):
         return_dict = {}
-        for i, row in rows:
+        for i, row in rows.iterrows():
             if row.subject_id not in return_dict.keys():
                 return_dict[row.subject_id] = {}
             if row.study_id not in return_dict[row.subject_id].keys():
@@ -452,6 +454,22 @@ class MimicCxr(Dataset):
             return_dict[row.subject_id][row.study_id]['images'][row.dicom_id] = self.filer.get_ptimage(row)
             report_row = row if not self.randomize_reports else self.get_negative_row(row, same_study=False)
             return_dict[row.subject_id][row.study_id]['report'] = self.filer.get_report(report_row)
+        return return_dict
+
+    def __getitem__(self, item):
+        id = self.ids[item]
+        if self.group_by == 'patient':
+            rows = self.df[self.df.subject_id == id]
+        elif self.group_by == 'study':
+            rows = self.df[self.df.study_id == id]
+        elif self.group_by == 'image':
+            rows = self.df[self.df.dicom_id == id]
+        else:
+            raise Exception
+        return_dict = self.get_item_from_rows(rows)
+        for k1, v1 in return_dict.items():
+            for k2, v2 in return_dict.items():
+                v2['index'] = item
         return return_dict
 
     def get_negative_row(self, row, same_study=None, same_patient=None):
@@ -663,165 +681,191 @@ class ImaGenomeFiler:
         else:
             raise Exception
 
+    def get_silver_scene_graph_json_file(self, dicom_id):
+        return self.get_full_path('silver_dataset/scene_graph/%s_SceneGraph.json' % dicom_id)
+
     def get_silver_scene_graph_json(self, dicom_id):
-        with open(self.get_full_path('silver_dataset/scene_graph/%s_SceneGraph.json' % dicom_id), 'r') as f:
+        with open(self.get_silver_scene_graph_json_file(dicom_id), 'r') as f:
             return json.load(f)
+
+    def get_objects_dir(self):
+        return self.get_full_path('objects')
+
+    def get_objects_file(self, dicom_id):
+        return os.path.join(self.get_objects_dir(), dicom_id + '.pkl')
+
+    def save_objects(self, obj, dicom_id):
+        if not os.path.exists(self.get_objects_dir()):
+            os.mkdir(self.get_objects_dir())
+        with open(self.get_objects_file(dicom_id), 'wb') as f:
+            pkl.dump(obj, f)
+
+    def get_objects(self, dicom_id):
+        with open(self.get_objects_file(dicom_id), 'rb') as f:
+            return pkl.load(f)
+
+
+def update_objects(objects, bbox, coord_original, sentence_id, sentence, label, context):
+    if bbox not in objects['bbox_to_sents'].keys():
+        objects['bbox_to_sents'][bbox] = {
+            'coord_original': coord_original,
+            'sentence_ids': [],
+            'sentences': [],
+            'labels': [],
+            'contexts': [],
+        }
+    sent_info = objects['bbox_to_sents'][bbox]
+    sent_info['sentence_ids'].append(sentence_id)
+    sent_info['sentences'].append(sentence)
+    sent_info['labels'].append(label)
+    sent_info['contexts'].append(context)
+    if sentence_id not in objects['sent_to_bboxes'].keys():
+        objects['sent_to_bboxes'][sentence_id] = {
+            'sentence': sentence,
+            'bboxes': [],
+            'coords_original': [],
+            'labels': [],
+            'contexts': [],
+        }
+    bbox_info = objects['sent_to_bboxes'][sentence_id]
+    bbox_info['bboxes'].append(bbox)
+    bbox_info['coords_original'].append(coord_original)
+    bbox_info['labels'].append(label)
+    bbox_info['contexts'].append(context)
+
+
+def get_objects(dicom_id, gold, gold_objects_df=None, imagenome_filer=None):
+    if gold:
+        assert gold_objects_df is not None
+        object_rows = gold_objects_df[gold_objects_df.image_id.str.replace('.dcm', '') == dicom_id]
+        objects = {'bbox_to_sents': {}, 'sent_to_bboxes': {}}
+        for i, row in object_rows.iterrows():
+            update_objects(
+                objects,
+                bbox=row.bbox,
+                coord_original=eval(row.coord_original),
+                sentence_id=row.row_id,
+                sentence=row.sentence,
+                label=row.label_name,
+                context=row.context
+            )
+    else:
+        assert imagenome_filer is not None
+        objects = {'bbox_to_sents': {}, 'sent_to_bboxes': {}}
+        if not os.path.exists(imagenome_filer.get_silver_scene_graph_json_file(dicom_id)):
+            return objects
+        scene_graph = imagenome_filer.get_silver_scene_graph_json(dicom_id)
+        temp_objects = {obj['object_id']: obj for obj in scene_graph['objects']}
+        for bbox_attributes in scene_graph['attributes']:
+            if bbox_attributes['object_id'] not in temp_objects.keys():
+                continue
+            obj = temp_objects[bbox_attributes['object_id']]
+            for sentence_id, sentence, sentence_attributes in zip(
+                    bbox_attributes['phrase_IDs'], bbox_attributes['phrases'], bbox_attributes['attributes']):
+                coord_original = [
+                    obj['original_x1'], obj['original_y1'], obj['original_x2'], obj['original_x2']]
+                for attribute in sentence_attributes:
+                    _, context, label = attribute.split('|')
+                    update_objects(
+                        objects,
+                        bbox=obj['bbox_name'],
+                        coord_original=coord_original,
+                        sentence_id=sentence_id,
+                        sentence=sentence,
+                        label=label,
+                        context=context
+                    )
+    return objects
 
 
 class ImaGenomeDataset(MimicCxr):
-    def __init__(self, df, mimic_cxr_filer, imagenome_filer, group_by='patient', gold=False, randomize_reports=False,
-                 shuffle_sentence_labels=False, random_sentence_labels=False):
+    def __init__(self, df, mimic_cxr_filer, imagenome_filer, group_by='sentence', gold=False, randomize_reports=False,
+                 randomize_objects_mode=None, sentences_df=None):
+        self.group_by_sentence = group_by == 'sentence'
+        if self.group_by_sentence:
+            group_by = 'image'
         super().__init__(df, mimic_cxr_filer, group_by=group_by, randomize_reports=randomize_reports)
         self.imagenome_filer = imagenome_filer
         self.gold = gold
         if self.gold:
             self.gold_objects_df = self.imagenome_filer.get_gold_file('gold_object_attribute_with_coordinates.txt')
-        self.shuffle_sentence_labels = shuffle_sentence_labels
-        self.random_sentence_labels = random_sentence_labels
-        if self.shuffle_sentence_labels:
-            assert not self.random_sentence_labels
+        self.randomize_objects_mode = randomize_objects_mode
+        self.sentences_df = sentences_df
+        if self.group_by_sentence:
+            assert self.sentences_df is not None
 
-    def randomize_sentence_labels_func(self, objects, random_labels=None):
-        if random_labels is None:
-            values = list(objects['sent_to_bboxes'].values())
-            random.shuffle(values)
+    def get_negative_parts_for_objects(self, objects, get_external_negatives=False, part_type='bbox', dicom_id=None):
+        assert part_type in {'sentence', 'bbox'}
+        neg_parts = []
+        if get_external_negatives:
+            assert dicom_id is not None
         else:
-            values = random_labels
-        keys = list(objects['sent_to_bboxes'].keys())
+            assert part_type == 'bbox'
+        while len(neg_parts) < len(objects['sent_to_bboxes']):
+            if get_external_negatives:
+                neg_row = self.get_negative_row(self.df[self.df.dicom_id == dicom_id].iloc[0])
+                neg_objects = self.get_objects(neg_row.dicom_id)
+            else:
+                neg_objects = objects
+            for sentence_id, obj in neg_objects['sent_to_bboxes'].items():
+                part = {k: v for k, v in obj.items() if k != 'sentence'} \
+                    if part_type == 'bbox' else {'sentence': obj['sentence']}
+                part['original_sentence_id'] = sentence_id
+                part['part_randomized'] = part_type
+                neg_parts.append(part)
+        neg_parts = neg_parts[:len(objects['sent_to_bboxes'])]
+        random.shuffle(neg_parts)
+        return neg_parts
+
+    def randomize_objects(self, objects, dicom_id=None, mode='random_sentences'):
+        assert mode in {'random_bboxes', 'random_sentences', 'shuffle_bboxes_sentences'}
+        part_type = 'sentence' if mode == 'random_sentences' else 'bbox'
+        get_external_negatives = mode != 'shuffle_bboxes_sentences'
+        neg_parts = self.get_negative_parts_for_objects(
+            objects, get_external_negatives=get_external_negatives, part_type=part_type, dicom_id=dicom_id)
         new_objects = {k: v if k not in ['sent_to_bboxes', 'bbox_to_sents'] else {} for k, v in objects.items()}
-        new_objects['shuffled'] = True
-        for sentence_id, v in zip(keys, values):
-            sentence = objects['sent_to_bboxes'][sentence_id]['sentence']
-            v['sentence'] = sentence
-            new_objects['sent_to_bboxes'][sentence_id] = v
+        new_objects['mode'] = mode
+        for (sentence_id, original_value), neg_part in zip(objects['sent_to_bboxes'].items(), neg_parts):
+            new_value = dict(original_value)
+            new_value.update(neg_part)
+            sentence = new_value['sentence']
             for bbox, coord_original, label, context in zip(
-                    v['bboxes'], v['coords_original'], v['labels'], v['contexts']):
-                if bbox not in new_objects['bbox_to_sents'].keys():
-                    new_objects['bbox_to_sents'][bbox] = {
-                        'coord_original': coord_original,
-                        'sentence_ids': [],
-                        'sentences': [],
-                        'labels': [],
-                        'contexts': [],
-                    }
-                sent_info = new_objects['bbox_to_sents'][bbox]
-                sent_info['sentence_ids'].append(sentence_id)
-                sent_info['sentences'].append(sentence)
-                sent_info['labels'].append(label)
-                sent_info['contexts'].append(context)
+                    new_value['bboxes'], new_value['coords_original'], new_value['labels'], new_value['contexts']):
+                self.update_objects(new_objects, bbox, coord_original, sentence_id, sentence, label, context)
+            # update with any additional information contained in new_value specifically for the sent_to_bboxes dict
+            new_objects['sent_to_bboxes'][sentence_id].update(new_value)
         return new_objects
 
-    def get_objects(self, dicom_id):
-        if self.gold:
-            object_rows = self.gold_objects_df[self.gold_objects_df.image_id.str.replace('.dcm', '') == dicom_id]
-            objects = {'original_object_rows': object_rows, 'bbox_to_sents': {}, 'sent_to_bboxes': {}}
-            for i, row in object_rows.iterrows():
-                coord_original = eval(row.coord_original)
-                if row.bbox not in objects['bbox_to_sents'].keys():
-                    objects['bbox_to_sents'][row.bbox] = {
-                        'coord_original': coord_original,
-                        'sentence_ids': [],
-                        'sentences': [],
-                        'labels': [],
-                        'contexts': [],
-                    }
-                sent_info = objects['bbox_to_sents'][row.bbox]
-                sent_info['sentence_ids'].append(row.row_id)
-                sent_info['sentences'].append(row.sentence)
-                sent_info['labels'].append(row.label_name)
-                sent_info['contexts'].append(row.context)
-                if row.row_id not in objects['sent_to_bboxes'].keys():
-                    objects['sent_to_bboxes'][row.row_id] = {
-                        'sentence': row.sentence,
-                        'bboxes': [],
-                        'coords_original': [],
-                        'labels': [],
-                        'contexts': [],
-                    }
-                bbox_info = objects['sent_to_bboxes'][row.row_id]
-                bbox_info['bboxes'].append(row.bbox)
-                bbox_info['coords_original'].append(coord_original)
-                bbox_info['labels'].append(row.label_name)
-                bbox_info['contexts'].append(row.context)
+    def __len__(self):
+        if self.group_by_sentence:
+            return len(self.sentences_df)
         else:
-            scene_graph = self.imagenome_filer.get_silver_scene_graph_json(dicom_id)
-            objects = {'original_scene_graph': scene_graph, 'bbox_to_sents': {}, 'sent_to_bboxes': {}}
-            temp_objects = {obj['object_id']: obj for obj in scene_graph['objects']}
-            for bbox_attributes in scene_graph['attributes']:
-                if bbox_attributes['object_id'] not in temp_objects.keys():
-                    continue
-                obj = temp_objects[bbox_attributes['object_id']]
-                for sentence_id, sentence, sentence_attributes in zip(
-                        bbox_attributes['phrase_IDs'], bbox_attributes['phrases'], bbox_attributes['attributes']):
-                    coord_original = [
-                        obj['original_x1'], obj['original_y1'], obj['original_x2'], obj['original_x2']]
-                    for attribute in sentence_attributes:
-                        _, context, label = attribute.split('|')
-                        if obj['bbox_name'] not in objects['bbox_to_sents'].keys():
-                            objects['bbox_to_sents'][obj['bbox_name']] = {
-                                'coord_original': coord_original,
-                                'sentence_ids': [],
-                                'sentences': [],
-                                'labels': [],
-                                'contexts': [],
-                            }
-                        sent_info = objects['bbox_to_sents'][obj['bbox_name']]
-                        sent_info['sentence_ids'].append(sentence_id)
-                        sent_info['sentences'].append(sentence)
-                        sent_info['labels'].append(label)
-                        sent_info['contexts'].append(context)
-                        if sentence_id not in objects['sent_to_bboxes'].keys():
-                            objects['sent_to_bboxes'][sentence_id] = {
-                                'sentence': sentence,
-                                'bboxes': [],
-                                'coords_original': [],
-                                'labels': [],
-                                'contexts': [],
-                            }
-                        bbox_info = objects['sent_to_bboxes'][sentence_id]
-                        bbox_info['bboxes'].append(obj['bbox_name'])
-                        bbox_info['coords_original'].append(coord_original)
-                        bbox_info['labels'].append(label)
-                        bbox_info['contexts'].append(context)
-        return objects
+            return super().__len__()
 
     def __getitem__(self, item):
-        """super:
-        id = self.ids[item]
-        if self.group_by == 'patient':
-            rows = self.df[self.df.subject_id == id].iterrows()
-        elif self.group_by == 'study':
-            rows = self.df[self.df.study_id == id].iterrows()
-        elif self.group_by == 'image':
-            rows = self.df[self.df.dicom_id == id].iterrows()
+        if self.group_by_sentence:
+            row = self.sentences_df.iloc[item]
+            sent_id, dicom_id = row.sent_id, row.dicom_id
+            rows = self.df[self.df.dicom_id == dicom_id]
+            return_dict = self.get_item_from_rows(rows)
         else:
-            raise Exception
-        return_dict = {}
-        for i, row in rows:
-            if row.subject_id not in return_dict.keys():
-                return_dict[row.subject_id] = {}
-            if row.study_id not in return_dict[row.study_id].keys():
-                return_dict[row.subject_id][row.study_id] = {'images': {}}
-            return_dict[row.subject_id][row.study_id]['images'][row.dicom_id] = self.filer.get_ptimage(row)
-            return_dict[row.subject_id][row.study_id]['report'] = self.filer.get_report(row)
-        return return_dict
-        """
-        return_dict = super().__getitem__(item)
+            sent_id = None
+            return_dict = super().__get_item__(item)
         for subject_id, v1 in return_dict.items():
             for study_id, v2 in v1.items():
                 objects = {}
                 for dicom_id, v3 in v2['images'].items():
-                    image_objects = self.get_objects(dicom_id)
-                    if self.shuffle_sentence_labels:
-                        image_objects = self.randomize_sentence_labels_func(image_objects)
-                    elif self.random_sentence_labels:
-                        neg_labels = []
-                        while len(neg_labels) < len(image_objects['sent_to_bboxes']):
-                            neg_row = self.get_negative_row(self.df[self.df.dicom_id == dicom_id].iloc[0])
-                            neg_objects = self.get_objects(neg_row.dicom_id)
-                            neg_labels += list(neg_objects['sent_to_bboxes'].values())
-                        neg_labels = neg_labels[:len(image_objects['sent_to_bboxes'])]
-                        image_objects = self.randomize_sentence_labels_func(image_objects, random_labels=neg_labels)
+                    image_objects = self.imagenome_filer.get_objects(dicom_id)
+                    if self.randomize_objects_mode is not None:
+                        image_objects = self.randomize_objects(
+                            image_objects, dicom_id=dicom_id, mode=self.randomize_objects_mode)
+                    if sent_id is not None:
+                        # if sent_id is not None, group_by_sentence is True and there is only one image
+                        v2['sentence'] = image_objects['sent_to_bboxes'][sent_id]['sentence']
+                        # mark index
+                        v2['index'] = item
+                        # register sentence id
+                        v2['sent_id'] = sent_id
                     objects[dicom_id] = image_objects
                 v2['objects'] = objects
         return return_dict
@@ -831,7 +875,7 @@ class ImaGenomeDataModule(BaseDataModule):
     def __init__(self, mimic_cxr_filer, imagenome_filer, batch_size=1, num_workers=0, collate_fn=default_collate_fn,
                  get_images=True, get_reports=True, force=False, parallel=False,
                  num_preprocessing_workers=os.cpu_count(), chunksize=1, split_slices='train,valid,test,gold', gold_test=False,
-                 randomize_reports=False, shuffle_sentence_labels=False, random_sentence_labels=False, **kwargs):
+                 randomize_reports=False, randomize_objects_mode=None, **kwargs):
         super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn, **kwargs)
         self.mimic_cxr_filer = mimic_cxr_filer
         self.imagenome_filer = imagenome_filer
@@ -851,12 +895,12 @@ class ImaGenomeDataModule(BaseDataModule):
                 key_values = split_slice.split(':')
                 key = key_values[0]
                 value = slice(*[int(i) for i in key_values[1:]])
+            if key == '': continue
             assert key in {'train', 'valid', 'test', 'gold'}
             self.split_slices[key] = value
         self.gold_test = gold_test
         self.randomize_reports = randomize_reports
-        self.shuffle_sentence_labels = shuffle_sentence_labels
-        self.random_sentence_labels = random_sentence_labels
+        self.randomize_objects_mode = randomize_objects_mode
 
     def get_kwargs(self, records):
         return dict(
@@ -907,6 +951,7 @@ class ImaGenomeDataModule(BaseDataModule):
             return
         self.imagenome_filer.download_file()
         dicom_ids = set()
+        gold_objects_df = self.imagenome_filer.get_gold_file('gold_object_attribute_with_coordinates.txt')
         for k, v in self.split_slices.items():
             if k in {'train', 'valid', 'test'}:
                 self.imagenome_filer.unzip_file('silver_dataset/scene_graph.zip')
@@ -922,29 +967,34 @@ class ImaGenomeDataModule(BaseDataModule):
             print('Downloading %s %s (%i):' % (k, str(v), len(split_df)))
             subject_ids = set(split_df.subject_id)
             new_records = self.process_records(split_df, subject_ids)
-            #new_records = []
-            #for kwargs in self.yield_args(split_df, subject_ids):
-            #    try:
-            #        new_records.append(process_records(**kwargs))
-            #    except Exception as e:
-            #        print(e)
-            #new_records = pd.concat(new_records)
-            #new_records = pd.concat(
-            #    [process_records(**kwargs) for kwargs in self.yield_args(split_df, subject_ids)])
-            #new_records = process_records(**self.get_kwargs(split_df), verbose=True)
+            sent_ids = []
+            sent_ids_df = {'sent_id': [], 'dicom_id': []}
+            print('Preprocessing objects')
+            for i, row in tqdm(new_records.iterrows(), total=len(new_records)):
+                if os.path.exists(self.imagenome_filer.get_objects_file(row.dicom_id)):
+                    objects = self.imagenome_filer.get_objects(row.dicom_id)
+                else:
+                    objects = get_objects(
+                        row.dicom_id, k == 'gold', gold_objects_df=gold_objects_df, imagenome_filer=self.imagenome_filer)
+                    self.imagenome_filer.save_objects(objects, row.dicom_id)
+                sent_ids.append(sorted(list(objects['sent_to_bboxes'].keys()), key=lambda x: float(x.split('|')[1])))
+                sent_ids_df['sent_id'].extend(sent_ids[-1])
+                sent_ids_df['dicom_id'].extend([row.dicom_id] * len(sent_ids[-1]))
+            new_records['sent_ids'] = sent_ids
             new_records.to_csv(self.imagenome_filer.get_full_path('%s_subset.csv' % k))
+            pd.DataFrame(sent_ids_df).to_csv(self.imagenome_filer.get_full_path('%s_sentences.csv' % k))
         self.data_prepared = True
 
     def get_dataset(self, split, **kwargs):
         if 'randomize_reports' not in kwargs.keys():
             kwargs['randomize_reports'] = self.randomize_reports
-        if 'shuffle_sentence_labels' not in kwargs.keys():
-            kwargs['shuffle_sentence_labels'] = self.shuffle_sentence_labels
-        if 'random_sentence_labels' not in kwargs.keys():
-            kwargs['random_sentence_labels'] = self.random_sentence_labels
+        if 'randomize_objects_mode' not in kwargs.keys():
+            kwargs['randomize_objects_mode'] = self.randomize_objects_mode
         split_df = pd.read_csv(self.imagenome_filer.get_full_path('%s_subset.csv' % split))
+        sentences_df = pd.read_csv(self.imagenome_filer.get_full_path('%s_sentences.csv' % split))
         return ImaGenomeDataset(
-            split_df, self.mimic_cxr_filer, self.imagenome_filer, gold=split=='gold', group_by='image', **kwargs)
+            split_df, self.mimic_cxr_filer, self.imagenome_filer, gold=split=='gold', group_by='sentence',
+            sentences_df=sentences_df, **kwargs)
 
     def setup(self, stage=None):
         if stage == 'fit' or stage is None:
@@ -955,22 +1005,3 @@ class ImaGenomeDataModule(BaseDataModule):
                 self._test = self.get_dataset('gold')
             else:
                 self._test = self.get_dataset('test')
-
-
-def bbox_to_mask(bbox, image_shape):
-    image1 = torch.zeros(image_shape, dtype=torch.bool)
-    image1[bbox[1]:, bbox[0]:] = 1
-    image2 = torch.zeros(image_shape, dtype=torch.bool)
-    image2[:bbox[3] + 1, :bbox[2] + 1] = 1
-    box_mask = image1 & image2
-    return box_mask
-
-
-def mask_to_bbox(box_mask):
-    if box_mask.sum() == 0:
-        return [-1, -1, -1, -1]
-    indices0 = torch.arange(box_mask.shape[0])
-    indices1 = torch.arange(box_mask.shape[1])
-    indices0 = indices0.unsqueeze(1).expand(*box_mask.shape)[box_mask]
-    indices1 = indices1.unsqueeze(0).expand(*box_mask.shape)[box_mask]
-    return [indices1.min().item(), indices0.min().item(), indices1.max().item(), indices0.max().item()]

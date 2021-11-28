@@ -20,12 +20,14 @@ class GLoRIA(nn.Module):
         self.cfg = cfg
         self.text_encoder = builder.build_text_model(cfg)
         self.img_encoder = builder.build_img_model(cfg)
+        self.no_attn_vec = nn.Parameter(torch.randn(self.cfg.model.text.embedding_dim)) \
+            if self.cfg.model.gloria.no_attn_vec else None
 
         self.local_loss = loss.gloria_loss.local_loss
         self.global_loss = loss.gloria_loss.global_loss
         self.local_loss_weight = self.cfg.model.gloria.local_loss_weight
         self.global_loss_weight = self.cfg.model.gloria.global_loss_weight
-        self.attention_loss_weight = self.cfg.model.gloria.attention_loss_weight
+#         self.attention_loss_weight = self.cfg.model.gloria.attention_loss_weight
 
         self.temp1 = self.cfg.model.gloria.temp1
         self.temp2 = self.cfg.model.gloria.temp2
@@ -82,9 +84,9 @@ class GLoRIA(nn.Module):
         loss = 0
         loss += (l_loss0 + l_loss1) * self.local_loss_weight
         loss += (g_loss0 + g_loss1) * self.global_loss_weight
-        if self.attn_loss_weight is not None:
-            assert attn_label is not None
-            loss += self._calc_attn_loss(attn_maps, attn_labels) * self.attn_loss_weight
+#         if self.attn_loss_weight is not None:
+#             assert attn_label is not None
+#             loss += self._calc_attn_loss(attn_maps, attn_labels) * self.attn_loss_weight
 
         return loss, attn_maps
 

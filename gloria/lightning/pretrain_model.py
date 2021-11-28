@@ -34,11 +34,24 @@ class PretrainModel(LightningModule):
                 self.gloria.plot_attn_maps(
                     attn_maps, imgs, sents, self.current_epoch, batch_idx
                 )
-        return loss
+        return dict(loss=loss, attn_maps=attn_maps, sents=sents)
+
+#     def training_step_end(self, step_outputs):
+#         return step_outputs
 
     def validation_step(self, batch, batch_idx):
-        loss, _, _ = self.shared_step(batch, "val")
-        return loss
+        loss, attn_maps, sents = self.shared_step(batch, "val")
+        return dict(loss=loss, attn_maps=attn_maps, sents=sents)
+
+#     def validation_step_end(self, step_outputs):
+#         return step_outputs
+
+    def test_step(self, batch, batch_idx):
+        loss, attn_maps, sents = self.shared_step(batch, "test")
+        return dict(loss=loss, attn_maps=attn_maps, sents=sents)
+
+#     def test_step_end(self, step_outputs):
+#         return step_outputs
 
     def shared_step(self, batch, split):
         """Similar to traning step"""

@@ -15,6 +15,8 @@ from pytorch_lightning.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
 )
+from gloria.lightning.callbacks import EvaluateLocalization, WeightInstancesByLocalization
+from gloria.datasets.mimic_for_gloria import GloriaCollateFn
 
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
@@ -65,6 +67,16 @@ def main(cfg, args):
     # define lightning module
     model = gloria.builder.build_lightning_model(cfg, dm)
 
+    # logging
+    if "logger" in cfg.lightning:
+        logger_type = cfg.lightning.logger.pop("logger_type")
+        logger_class = getattr(pl_loggers, logger_type)
+        cfg.lightning.logger.name = f"{cfg.experiment_name}_{cfg.extension}"
+        logger = logger_class(**cfg.lightning.logger)
+        cfg.lightning.logger.logger_type = logger_type
+    else:
+        logger = None
+
     # callbacks
     callbacks = []
     if "logger" in cfg.lightning:
@@ -78,16 +90,15 @@ def main(cfg, args):
     if "logger" in cfg.lightning and cfg.train.scheduler is not None:
         lr_monitor = LearningRateMonitor(logging_interval="step")
         callbacks.append(lr_monitor)
-
-    # logging
-    if "logger" in cfg.lightning:
-        logger_type = cfg.lightning.logger.pop("logger_type")
-        logger_class = getattr(pl_loggers, logger_type)
-        cfg.lightning.logger.name = f"{cfg.experiment_name}_{cfg.extension}"
-        logger = logger_class(**cfg.lightning.logger)
-        cfg.lightning.logger.logger_type = logger_type
-    else:
-        logger = None
+    if "evaluate_localization" in cfg.lightning:
+        gloria_collate_fn = GloriaCollateFn(cfg, 'test')
+        evaluate_localization = EvaluateLocalization(
+            gloria_collate_fn, save_dir=cfg.output_dir, **cfg.lightning.evaluate_localization)
+#         example_batch = next(iter(dm.train_dataloader()))
+#         evaluate_localization.get_windows(example_batch['imgs'][0, 0].shape, gloria=model)
+        callbacks.append(evaluate_localization)
+    if "weight_instances_by_localization" in cfg.lightning:
+        callbacks.append(WeightInstancesByLocalization(dm.dm, **cfg.lightning.weight_instances_by_localization))
 
     # setup pytorch-lightning trainer
     cfg.lightning.trainer.val_check_interval = args.val_check_interval

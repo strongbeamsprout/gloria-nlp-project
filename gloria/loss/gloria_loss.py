@@ -16,7 +16,7 @@ def cosine_similarity(x1, x2, dim=1, eps=1e-8):
     return (w12 / (w1 * w2).clamp(min=eps)).squeeze()
 
 
-def attention_fn(query, context, temp1):
+def attention_fn(query, context, temp1, no_attn_vec=None):
     """
     query: batch x ndf x queryL
     context: batch x ndf x ih x iw (sourceL=ihxiw)
@@ -28,6 +28,10 @@ def attention_fn(query, context, temp1):
 
     # --> batch x sourceL x ndf
     context = context.view(batch_size, -1, sourceL)
+    if no_attn_vec is not None:
+        sourceL += 1
+        expanded_no_attn_vec = no_attn_vec.expand(batch_size, no_attn_vec.shape[0]).unsqueeze(-1)
+        context = torch.cat([expanded_no_attn_vec, context], 2)
     contextT = torch.transpose(context, 1, 2).contiguous()
 
     # Get attention
@@ -53,6 +57,8 @@ def attention_fn(query, context, temp1):
     # (batch x ndf x sourceL)(batch x sourceL x queryL)
     # --> batch x ndf x queryL
     weightedContext = torch.bmm(context, attnT)
+    if no_attn_vec is not None:
+        attn = attn[:, :, 1:]
 
     return weightedContext, attn.view(batch_size, -1, ih, iw)
 
@@ -83,7 +89,7 @@ def global_loss(cnn_code, rnn_code, eps=1e-8, temp3=10.0):
 
 
 def local_loss(
-    img_features, words_emb, cap_lens, temp1=4.0, temp2=5.0, temp3=10.0, agg="sum"
+    img_features, words_emb, cap_lens, temp1=4.0, temp2=5.0, temp3=10.0, agg="sum", no_attn_vec=None
 ):
 
     batch_size = img_features.shape[0]
@@ -102,7 +108,7 @@ def local_loss(
         context = img_features  # [48, 768, 19, 19]
 
         weiContext, attn = attention_fn(
-            word, context, temp1
+            word, context, temp1, no_attn_vec=no_attn_vec
         )  # [48, 768, 25], [48, 25, 19, 19]
 
         att_maps.append(

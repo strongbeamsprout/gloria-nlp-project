@@ -3,12 +3,17 @@ phase: 'pretrain'
 
 lightning:
     trainer:
-       gpus: '0'
-       max_epochs: 50
-       distributed_backend: 'dp'
-       gradient_clip_val: 0.25
-       lr: 0.00005
-       precision: 16
+        gpus: '0'
+        max_epochs: 50
+        distributed_backend: 'dp'
+        gradient_clip_val: 0.25
+        lr: 0.00005
+        precision: 16
+        reload_dataloaders_every_n_epochs: 1
+#         fast_dev_run: 3
+        limit_train_batches: 0.2
+        limit_val_batches: 0.2
+        check_val_every_n_epoch: 1
     checkpoint_callback:
         monitor: 'val_loss'
         dirpath: '/scratch/mcinerney.de/gloria_outputs/ckpt'
@@ -19,25 +24,31 @@ lightning:
         monitor: 'val_loss'
         min_delta: 0.00
         patience: 10
-        verbose: False
+        verbose: false
         mode: 'min'
     logger:
         logger_type: 'WandbLogger'
         save_dir: '/scratch/mcinerney.de/gloria_outputs/'
         project: 'gloria_v2'
+    evaluate_localization:
+        attn_overlay_mode: 'upsample'
+    weight_instances_by_localization:
+        weight_mode: 'entropy'
+        temp: 1
 
-model: 
-    gloria: 
+model:
+    gloria:
         local_loss_weight: 1.0
         global_loss_weight: 1.0
         temp1: 4.0
         temp2: 5.0
         temp3: 10.0
+        no_attn_vec: true
     vision:
         model_name: 'resnet_50'
         freeze_cnn: false
         pretrained: true
-    text:  
+    text:
         bert_type: "emilyalsentzer/Bio_ClinicalBERT"
         last_n_layers: 4
         aggregate_method: 'sum'
@@ -45,28 +56,29 @@ model:
         embedding_dim: 768
         freeze_bert: false
         agg_tokens: true
-data: 
+
+data:
     dataset: imagenome
     text: 
-      word_num: 97
-      captions_per_image: 5
-      full_report: false
+        word_num: 97
+        captions_per_image: 5
+        full_report: true
     image:
-      imsize: 256
-    split_slices: 'train,valid'
+        imsize: 256
+    split_slices: ''
     parallel: true
     get_physio_creds: false
     mimic_cxr_download_directory: '/scratch/mcinerney.de/mimic-cxr'
     imagenome_download_directory: '/scratch/mcinerney.de/imagenome'
     gold_test: false
-    randomize_reports: true
+    randomize_reports: false
 
 transforms: 
     norm: 'half'
     random_crop:
         crop_size: 224
 
-train: 
+train:
     update_interval: 1000
     batch_size: 48
     num_workers: 18
