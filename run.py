@@ -158,7 +158,7 @@ if __name__ == "__main__":
 
         # set directory names
         cfg.extension = str(args.random_seed) if args.splits != 1 else timestamp
-        cfg.output_dir = f"./data/output/{cfg.experiment_name}/{cfg.extension}"
+        cfg.output_dir = f"{cfg.base_output_dir}/{cfg.experiment_name}/{cfg.extension}"
         cfg.lightning.checkpoint_callback.dirpath = os.path.join(
             cfg.lightning.checkpoint_callback.dirpath,
             f"{cfg.experiment_name}/{cfg.extension}",

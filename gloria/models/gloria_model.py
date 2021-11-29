@@ -11,6 +11,7 @@ from .. import loss
 from .. import utils
 from transformers import AutoTokenizer
 from nltk.tokenize import RegexpTokenizer
+from torch.distributions.categorical import Categorical
 
 
 class GLoRIA(nn.Module):
@@ -27,6 +28,7 @@ class GLoRIA(nn.Module):
         self.global_loss = loss.gloria_loss.global_loss
         self.local_loss_weight = self.cfg.model.gloria.local_loss_weight
         self.global_loss_weight = self.cfg.model.gloria.global_loss_weight
+        self.sparse_attn_weight = self.cfg.model.gloria.sparse_attn_weight
 #         self.attention_loss_weight = self.cfg.model.gloria.attention_loss_weight
 
         self.temp1 = self.cfg.model.gloria.temp1
@@ -63,7 +65,9 @@ class GLoRIA(nn.Module):
             temp1=self.temp1,
             temp2=self.temp2,
             temp3=self.temp3,
+            no_attn_vec=self.no_attn_vec,
         )
+
         return l_loss0, l_loss1, attn_maps
 
     def _calc_global_loss(self, img_emb_g, text_emb_g):
@@ -84,6 +88,10 @@ class GLoRIA(nn.Module):
         loss = 0
         loss += (l_loss0 + l_loss1) * self.local_loss_weight
         loss += (g_loss0 + g_loss1) * self.global_loss_weight
+        if self.sparse_attn_weight is not None:
+            avg_attn_entropy = [Categorical(am[0].mean(0).reshape(-1)).entropy() for am in attn_maps]
+            sparsity_regularization = sum(avg_attn_entropy) / len(avg_attn_entropy)
+            loss += sparsity_regularization * self.sparse_attn_weight
 #         if self.attn_loss_weight is not None:
 #             assert attn_label is not None
 #             loss += self._calc_attn_loss(attn_maps, attn_labels) * self.attn_loss_weight

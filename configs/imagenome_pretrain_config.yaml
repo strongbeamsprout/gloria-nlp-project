@@ -10,7 +10,6 @@ lightning:
         lr: 0.00005
         precision: 16
         reload_dataloaders_every_n_epochs: 1
-#         fast_dev_run: 3
         limit_train_batches: 0.2
         limit_val_batches: 0.2
         check_val_every_n_epoch: 1
@@ -32,9 +31,10 @@ lightning:
         project: 'gloria_v2'
     evaluate_localization:
         attn_overlay_mode: 'upsample'
-    weight_instances_by_localization:
-        weight_mode: 'entropy'
-        temp: 1
+        log_train_every: 100
+#    weight_instances_by_localization:
+#        weight_mode: 'entropy'
+#        temp: 2.0
 
 model:
     gloria:
@@ -43,7 +43,8 @@ model:
         temp1: 4.0
         temp2: 5.0
         temp3: 10.0
-        no_attn_vec: true
+        no_attn_vec: false
+#        sparse_attn_weight: 1.0
     vision:
         model_name: 'resnet_50'
         freeze_cnn: false
@@ -72,6 +73,7 @@ data:
     imagenome_download_directory: '/scratch/mcinerney.de/imagenome'
     gold_test: false
     randomize_reports: false
+    group_by: 'sentence'
 
 transforms: 
     norm: 'half'
@@ -81,7 +83,7 @@ transforms:
 train:
     update_interval: 1000
     batch_size: 48
-    num_workers: 18
+    num_workers: 12
     nvis: 8
     rand_vis: false 
     optimizer: 
@@ -92,3 +94,5 @@ train:
         monitor: 'val_loss'
         inerval: 'epoch'
         frequency: 1
+
+base_output_dir: '/scratch/mcinerney.de/gloria_outputs/output'

@@ -468,7 +468,7 @@ class MimicCxr(Dataset):
             raise Exception
         return_dict = self.get_item_from_rows(rows)
         for k1, v1 in return_dict.items():
-            for k2, v2 in return_dict.items():
+            for k2, v2 in v1.items():
                 v2['index'] = item
         return return_dict
 
@@ -850,7 +850,7 @@ class ImaGenomeDataset(MimicCxr):
             return_dict = self.get_item_from_rows(rows)
         else:
             sent_id = None
-            return_dict = super().__get_item__(item)
+            return_dict = super().__getitem__(item)
         for subject_id, v1 in return_dict.items():
             for study_id, v2 in v1.items():
                 objects = {}
@@ -875,7 +875,7 @@ class ImaGenomeDataModule(BaseDataModule):
     def __init__(self, mimic_cxr_filer, imagenome_filer, batch_size=1, num_workers=0, collate_fn=default_collate_fn,
                  get_images=True, get_reports=True, force=False, parallel=False,
                  num_preprocessing_workers=os.cpu_count(), chunksize=1, split_slices='train,valid,test,gold', gold_test=False,
-                 randomize_reports=False, randomize_objects_mode=None, **kwargs):
+                 randomize_reports=False, randomize_objects_mode=None, group_by='sentence', **kwargs):
         super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn, **kwargs)
         self.mimic_cxr_filer = mimic_cxr_filer
         self.imagenome_filer = imagenome_filer
@@ -901,6 +901,7 @@ class ImaGenomeDataModule(BaseDataModule):
         self.gold_test = gold_test
         self.randomize_reports = randomize_reports
         self.randomize_objects_mode = randomize_objects_mode
+        self.group_by = group_by
 
     def get_kwargs(self, records):
         return dict(
@@ -993,7 +994,7 @@ class ImaGenomeDataModule(BaseDataModule):
         split_df = pd.read_csv(self.imagenome_filer.get_full_path('%s_subset.csv' % split))
         sentences_df = pd.read_csv(self.imagenome_filer.get_full_path('%s_sentences.csv' % split))
         return ImaGenomeDataset(
-            split_df, self.mimic_cxr_filer, self.imagenome_filer, gold=split=='gold', group_by='sentence',
+            split_df, self.mimic_cxr_filer, self.imagenome_filer, gold=split=='gold', group_by=self.group_by,
             sentences_df=sentences_df, **kwargs)
 
     def setup(self, stage=None):

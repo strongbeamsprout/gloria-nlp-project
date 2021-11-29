@@ -59,6 +59,10 @@ def discrete_entropy(dist):
     return Categorical(dist).entropy()
 
 
+def get_no_attn_weight(dist):
+    return 1 - dist.sum(-1)
+
+
 class Metrics:
     def __init__(self):
         self.attn_bbox_metrics = {
@@ -68,13 +72,14 @@ class Metrics:
             'avg_precision': average_precision,
         }
         self.attn_entropy = discrete_entropy
+        self.no_attn_weight = get_no_attn_weight
 
-    def __call__(self, attn, bboxes):
-        metrics = {'attn_entropy': self.attn_entropy(attn.reshape(-1))}
-        segmentation_label = sent_bboxes_to_segmentation_label(attn.shape, bboxes)
+    def __call__(self, attn, attn_overlay, bboxes):
+        metrics = {'attn_entropy': self.attn_entropy(attn.reshape(-1)), 'no_attn_weight': self.no_attn_weight(attn.reshape(-1))}
+        segmentation_label = sent_bboxes_to_segmentation_label(attn_overlay.shape, bboxes)
         for k, v in self.attn_bbox_metrics.items():
             if segmentation_label.sum() > 0:
-                metrics[k] = v(attn.reshape(-1), segmentation_label.reshape(-1).long())
+                metrics[k] = v(attn_overlay.reshape(-1), segmentation_label.reshape(-1).long())
             else:
                 metrics[k] = None
         return metrics
@@ -162,14 +167,15 @@ def get_train_outputs(outputs):
 
 
 class EvaluateLocalization(Callback):
-    def __init__(self, gloria_collate_fn, save_dir, batch_size=None, attn_overlay_mode='upsample'):
+    def __init__(self, gloria_collate_fn, save_dir, batch_size=None, attn_overlay_mode='upsample', log_train_every=100):
         super().__init__()
         self.gloria_collate_fn = gloria_collate_fn
         self.save_dir = save_dir
-        self.metrics = Metrics()
-        self.shape_to_windows_cache = {}
         self.batch_size = batch_size
         self.attn_overlay_mode = attn_overlay_mode
+        self.log_train_every = log_train_every
+        self.metrics = Metrics()
+        self.shape_to_windows_cache = {}
 
     def get_windows(self, image_shape, gloria=None, cache=True):
         image_shape = (1, *image_shape[1:])
@@ -256,7 +262,8 @@ class EvaluateLocalization(Callback):
     def evaluate_instances(self, info, attn_overlay_mode='upsample'):
         evaluation_info = {}
         for image, attn, bboxes in zip(info['image'], info['attn'], info['bboxes']):
-            metrics = self.metrics(self.get_attn_overlay(attn, image.shape, mode=attn_overlay_mode), bboxes)
+            attn_overlay = self.get_attn_overlay(attn, image.shape, mode=attn_overlay_mode)
+            metrics = self.metrics(torch.tensor(attn), attn_overlay, bboxes)
             for k, v in metrics.items():
                 if k not in evaluation_info.keys():
                     evaluation_info[k] = []
@@ -277,7 +284,8 @@ class EvaluateLocalization(Callback):
             'bboxes',
             'auroc',
             'avg_precision',
-            'attn_entropy'
+            'attn_entropy',
+            'no_attn_weight',
         ]
         rows = [info[col] for col in columns if col in info.keys()]
         rows = list(zip(*rows))
@@ -378,11 +386,19 @@ class EvaluateLocalization(Callback):
     def evaluate_and_save(self, path=None, instances=None, batch=None, outputs=None, pl_module=None, save_full_data=False,
                           plot=False):
         return_dict = {}
+        if path is not None and not os.path.exists(path):
+            os.mkdir(path)
         if instances is not None:
             assert batch is None and outputs is None
         elif batch is not None:
             assert instances is None
             instances = batch['instances']
+            instance = instances[0]
+            patient_id = next(iter(instance.keys()))
+            study_id = next(iter(instance[patient_id].keys()))
+            instance = instance[patient_id][study_id]
+            if 'sent_id' not in instance.keys():
+                batch, outputs = None, None
         else:
             raise Exception
         # load csv if it does exist
@@ -403,7 +419,7 @@ class EvaluateLocalization(Callback):
         # add reshaped image to info
         info['image'] = []
         for batch in batches:
-            info['image'].extend(list(batch['imgs'][:, 0].numpy()))
+            info['image'].extend(list(batch['imgs'][:, 0].detach().cpu().numpy()))
         # add new bounding boxes for reshaped image
         new_bboxes = self.process_bboxes(original_image_shapes, bboxes)
         new_bboxes = {k: v for k, v in zip(bbox_names, new_bboxes)}
@@ -418,11 +434,11 @@ class EvaluateLocalization(Callback):
                 b = pl_module.transfer_batch_to_device(b, pl_module.device)
                 img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents = pl_module.gloria(b)
                 ams = pl_module.gloria.get_attn_maps(img_emb_l, text_emb_l, sents)
-                ams = [am[0].sum(0).cpu().detach().numpy() for am in ams]
+                ams = [am[0].mean(0).detach().cpu().numpy() for am in ams]
                 info['attn'].extend(list(ams))
         else:
             ams = outputs['attn_maps']
-            ams = [am[0].sum(0).cpu().detach().numpy() for am in ams]
+            ams = [am[0].mean(0).detach().cpu().numpy() for am in ams]
             info['attn'].extend(list(ams))
         # evaluate instances
         info.update(self.evaluate_instances(info, attn_overlay_mode=self.attn_overlay_mode))
@@ -446,47 +462,64 @@ class EvaluateLocalization(Callback):
         return return_dict
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
-        # outputs = get_train_outputs(outputs)
-        # because crop is random during train, we need to redo the forward pass with deterministic crop
-        self.gloria_collate_fn.device = pl_module.device
-        return_dict = self.evaluate_and_save(batch=batch, pl_module=pl_module)
-        df = return_dict['df']
-        if (~df.auroc.isnull()).sum() > 0:
-            pl_module.log('train/auroc_step', df.auroc[~df.auroc.isnull()].mean())
-        if (~df.avg_precision.isnull()).sum() > 0:
-            pl_module.log('train/avg_precision_step', df.avg_precision[~df.avg_precision.isnull()].mean())
-        if (~df.attn_entropy.isnull()).sum() > 0:
-            pl_module.log('train/attn_entropy_step', df.attn_entropy[~df.attn_entropy.isnull()].mean())
+        if pl_module.global_step % self.log_train_every != 0:
+            return
+        with torch.no_grad():
+            # outputs = get_train_outputs(outputs)
+            # because crop is random during train, we need to redo the forward pass with deterministic crop
+            self.gloria_collate_fn.device = pl_module.device
+            return_dict = self.evaluate_and_save(batch=batch, pl_module=pl_module)
+            df = return_dict['df']
+            logger = pl_module.logger.experiment
+            if (~df.auroc.isnull()).sum() > 0:
+                logger.log({"train/auroc_step": df.auroc[~df.auroc.isnull()].mean(),
+                            "global_step": trainer.global_step})
+            if (~df.avg_precision.isnull()).sum() > 0:
+                logger.log({"train/avg_precision_step": df.avg_precision[~df.avg_precision.isnull()].mean(),
+                            "global_step": trainer.global_step})
+            if (~df.attn_entropy.isnull()).sum() > 0:
+                logger.log({"train/attn_entropy_step": df.attn_entropy[~df.attn_entropy.isnull()].mean(),
+                            "global_step": trainer.global_step})
+            if (~df.no_attn_weight.isnull()).sum() > 0:
+                logger.log({"train/no_attn_weight_step": df.no_attn_weight[~df.no_attn_weight.isnull()].mean(),
+                            "global_step": trainer.global_step})
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
         path = os.path.join(self.save_dir, 'val_outputs_%i' % pl_module.current_epoch) \
             if self.save_dir is not None else None
         self.gloria_collate_fn.device = pl_module.device
-        self.evaluate_and_save(path=path, batch=batch, outputs=outputs)
+        self.evaluate_and_save(path=path, batch=batch, outputs=outputs, pl_module=pl_module)
 
     def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
         path = os.path.join(self.save_dir, 'test_outputs_%i' % pl_module.current_epoch) \
             if self.save_dir is not None else None
         self.gloria_collate_fn.device = pl_module.device
-        self.evaluate_and_save(path=path, batch=batch, outputs=outputs, save_full_data=True)
+        self.evaluate_and_save(path=path, batch=batch, outputs=outputs, pl_module=pl_module, save_full_data=True)
 
-    def shared_epoch_end(self, pl_module, epoch_type):
+    def shared_epoch_end(self, trainer, pl_module, epoch_type):
         path = os.path.join(self.save_dir, '%s_outputs_%i' % (epoch_type, pl_module.current_epoch)) \
             if self.save_dir is not None else None
         if path is not None:
             df = pd.read_csv(os.path.join(path, 'sentences.csv'))
+            logger = pl_module.logger.experiment
             if (~df.auroc.isnull()).sum() > 0:
-                pl_module.log('%s/auroc_epoch' % epoch_type, df.auroc[~df.auroc.isnull()].mean())
+                logger.log({"%s/auroc_step" % epoch_type: df.auroc[~df.auroc.isnull()].mean(),
+                            "global_step": trainer.global_step})
             if (~df.avg_precision.isnull()).sum() > 0:
-                pl_module.log('%s/avg_precision_epoch' % epoch_type, df.avg_precision[~df.avg_precision.isnull()].mean())
+                logger.log({"%s/avg_precision_step" % epoch_type: df.avg_precision[~df.avg_precision.isnull()].mean(),
+                            "global_step": trainer.global_step})
             if (~df.attn_entropy.isnull()).sum() > 0:
-                pl_module.log('%s/attn_entropy_epoch' % epoch_type, df.attn_entropy[~df.attn_entropy.isnull()].mean())
+                logger.log({"%s/attn_entropy_step" % epoch_type: df.attn_entropy[~df.attn_entropy.isnull()].mean(),
+                            "global_step": trainer.global_step})
+            if (~df.no_attn_weight.isnull()).sum() > 0:
+                logger.log({"%s/no_attn_weight_step" % epoch_type: df.no_attn_weight[~df.no_attn_weight.isnull()].mean(),
+                            "global_step": trainer.global_step})
 
     def on_validation_epoch_end(self, trainer, pl_module):
-        self.shared_epoch_end(pl_module, 'val')
+        self.shared_epoch_end(trainer, pl_module, 'val')
 
     def on_test_epoch_end(self, trainer, pl_module):
-        self.shared_epoch_end(pl_module, 'test')
+        self.shared_epoch_end(trainer, pl_module, 'test')
 
 
 class WeightInstancesByLocalization(Callback):
@@ -500,35 +533,35 @@ class WeightInstancesByLocalization(Callback):
 
     def get_weight_metric(self, outputs):
         ams = outputs['attn_maps']
-        ams = torch.stack([am[0].sum(0).cpu().detach() for am in ams])
+        ams = torch.stack([am[0].mean(0).detach().cpu() for am in ams])
         if self.weight_mode == 'entropy':
             return discrete_entropy(ams.reshape(ams.shape[0], -1))
         else:
             raise Exception
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
-        outputs = get_train_outputs(outputs)
-        indices = []
-        for instance in batch['instances']:
-            patient_id = next(iter(instance.keys()))
-            study_id = next(iter(instance[patient_id].keys()))
-            instance = instance[patient_id][study_id]
-            indices.append(instance['index'])
-        indices = torch.tensor(indices)
-        self.weight_mask[indices] = True
-        weights = self.get_weight_metric(outputs)
-        self.train_weights[indices] = weights
+        with torch.no_grad():
+            outputs = get_train_outputs(outputs)
+            indices = []
+            for instance in batch['instances']:
+                patient_id = next(iter(instance.keys()))
+                study_id = next(iter(instance[patient_id].keys()))
+                instance = instance[patient_id][study_id]
+                indices.append(instance['index'])
+            indices = torch.tensor(indices)
+            self.weight_mask[indices] = True
+            weights = self.get_weight_metric(outputs)
+            self.train_weights[indices] = weights
 
     def on_train_epoch_end(self, trainer, pl_module, outputs):
         # make sure all unset weights are set to the average of the set weights
-        import pdb; pdb.set_trace()
         mean = self.train_weights[self.weight_mask].mean()
         self.train_weights[~self.weight_mask] = mean
-        pl_module.log('train/weights_mean', mean)
         train_weights_softmax = torch.softmax(self.train_weights * self.temp, 0)
         # log entropy or normalized entropy of distribution
         self.dm.weight_instances(train_weights_softmax)
         logger = pl_module.logger.experiment
-        logger.log({"train/weights_hist": wandb.Histogram(self.train_weights.numpy()),
+        logger.log({"train/weights_mean": mean,
+                    "train/weights_hist": wandb.Histogram(self.train_weights.numpy()),
                     "train/weights_softmax_hist": wandb.Histogram(train_weights_softmax.numpy()),
                     "global_step": trainer.global_step})
