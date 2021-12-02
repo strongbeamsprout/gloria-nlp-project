@@ -4,55 +4,13 @@ from torchmetrics.functional import roc, precision_recall_curve, auroc, average_
 from torch.distributions.categorical import Categorical
 import copy
 from gloria.datasets.mimic_for_gloria import GloriaCollateFn, normalize, original_tensor_to_numpy_image
+from gloria.datasets.visualization_utils import *
 import torch
 import os
 from torch import nn
 import numpy as np
 import pandas as pd
 import wandb
-
-
-def bbox_to_mask(bbox, image_shape):
-    box_mask = torch.zeros(image_shape, dtype=torch.bool)
-    box_mask[bbox[1]:bbox[3] + 1, bbox[0]:bbox[2] + 1] = 1
-    return box_mask
-
-
-def mask_to_bbox(box_mask):
-    if box_mask.sum() == 0:
-        return [-1, -1, -1, -1]
-    indices0 = torch.arange(box_mask.shape[0])
-    indices1 = torch.arange(box_mask.shape[1])
-    indices0 = indices0.unsqueeze(1).expand(*box_mask.shape)[box_mask]
-    indices1 = indices1.unsqueeze(0).expand(*box_mask.shape)[box_mask]
-    return [indices1.min().item(), indices0.min().item(), indices1.max().item(), indices0.max().item()]
-
-
-def to_rgb(image):
-    return np.array((normalize(image) * 255).int().unsqueeze(-1).expand(*image.shape, 3).cpu(), dtype=np.uint8)
-
-
-def get_ent_to_bbox(sent_labels, sent_contexts, sent_bbox_names):
-    ent_to_bbox = {}
-    for label, context, bbox in zip(sent_labels, sent_contexts, sent_bbox_names):
-        if (label, context) not in ent_to_bbox.keys():
-            ent_to_bbox[(label, context)] = set()
-        ent_to_bbox[(label, context)].add(bbox)
-    return ent_to_bbox
-
-
-def sent_bboxes_to_segmentation_label(shape, sent_bboxes):
-    segmentation_label = torch.zeros(shape, dtype=torch.bool)
-    for bbox in sent_bboxes:
-        segmentation_label = segmentation_label | bbox_to_mask(bbox, shape)
-    return segmentation_label
-
-
-def draw_bounding_boxes(image, bboxes, color=(255, 0, 0)):
-    thickness = image.shape[0] // 100
-    for bbox in bboxes:
-        image = cv2.rectangle(image, bbox[:2], bbox[2:], color, thickness)
-    return image
 
 
 def discrete_entropy(dist):
@@ -167,15 +125,18 @@ def get_train_outputs(outputs):
 
 
 class EvaluateLocalization(Callback):
-    def __init__(self, gloria_collate_fn, save_dir, batch_size=None, attn_overlay_mode='upsample', log_train_every=100):
+    def __init__(self, gloria_collate_fn, save_dir=None, batch_size=None, eval_attn_overlay_mode='upsample',
+                 plot_attn_overlay_mode='upsample', log_train_every=100, val_save_full_data=False):
         super().__init__()
         self.gloria_collate_fn = gloria_collate_fn
         self.save_dir = save_dir
         self.batch_size = batch_size
-        self.attn_overlay_mode = attn_overlay_mode
+        self.eval_attn_overlay_mode = eval_attn_overlay_mode
+        self.plot_attn_overlay_mode = plot_attn_overlay_mode
         self.log_train_every = log_train_every
         self.metrics = Metrics()
         self.shape_to_windows_cache = {}
+        self.val_save_full_data = val_save_full_data
 
     def get_windows(self, image_shape, gloria=None, cache=True):
         image_shape = (1, *image_shape[1:])
@@ -307,69 +268,20 @@ class EvaluateLocalization(Callback):
 
     def get_attn_overlay(self, attn, image_shape, mode='upsample'):
         attn = torch.tensor(attn)
-        assert mode in {'windows', 'upsample', 'upsample_pyramid'}
+        assert mode in {'windows', 'pyramid', 'upsample'}
         if mode == 'windows':
             assert image_shape in self.shape_to_windows_cache.keys()
             windows = self.get_windows(image_shape)
             raise NotImplementedError
-            return new_attn
-        elif mode in {'upsample', 'upsample_pyramid'}:
+        elif mode == 'pyramid':
+            new_attn = pyramid_attn_overlay(attn, image_shape)
+        elif mode == 'upsample':
             new_attn = nn.Upsample(size=image_shape)(attn.reshape(1, 1, *attn.shape))[0, 0]
-            if mode == 'upsample_pyramid':
-                raise NotImplementedError
-            return new_attn
+        return new_attn
 
     def plot_info(self, info, path=None, attn_overlay_mode='upsample'):
-        figs = []
-        for sent, sent_labels, sent_contexts, bbox_names, original_image, original_bboxes, \
-            image, bboxes, attn, auroc, avg_precision, roc_curve, pr_curve in zip(
-            info[k] for k in [
-                'sentence', 'sent_labels', 'sent_contexts', 'bbox_names', 'original_image', 'original_bboxes'
-                'image', 'bboxes', 'attn', 'auroc', 'avg_precision', 'roc_curve', 'pr_curve']
-        ):
-            fig = plt.figure(figsize=(15, 5), tight_layout=True)
-            a1 = plt.subplot2grid((2, 5), (1, 0), rowspan = 1, colspan = 1)
-            a2 = plt.subplot2grid((2, 5), (1, 1), rowspan = 1, colspan = 1)
-            a3 = plt.subplot2grid((2, 5), (1, 2), rowspan = 1, colspan = 1)
-            a4 = plt.subplot2grid((2, 5), (1, 3), rowspan = 1, colspan = 1)
-            a5 = plt.subplot2grid((2, 5), (1, 4), rowspan = 1, colspan = 1)
-            text_a1 = plt.subplot2grid((2, 5), (0, 0), rowspan = 1, colspan = 3)
-            text_a2 = plt.subplot2grid((2, 5), (0, 3), rowspan = 1, colspan = 1)
-            text_a3 = plt.subplot2grid((2, 5), (0, 4), rowspan = 1, colspan = 1)
-            a1.imshow(draw_bounding_boxes(to_rgb(original_image), original_bboxes))
-            a2.imshow(draw_bounding_boxes(to_rgb(image), bboxes))
-            new_attn = self.get_attn_overlay(attn, image.shape[:2], mode=attn_overlay_mode)
-            if attn.sum() < 1:
-                no_attn_bar = torch.ones((max(int(new_attn.shape[0] * .05), 1), image.shape[1])) * (1 - attn.sum())
-                new_attn = torch.cat([new_attn, no_attn_bar], 0)
-            a3.imshow(draw_bounding_boxes(to_rgb(new_attn), bboxes))
-            if roc_curve is not None:
-                a4.plot(roc_curve[0], roc_curve[1])
-                a4.set_xlabel('1-Specificity')
-                a4.set_ylabel('Sensitivity/Recall')
-            if pr_curve is not None:
-                a5.plot(pr_curve[1], pr_curve[0])
-                a5.set(xlim=(0, 1), ylim=(0, 1))
-                a5.set_xlabel('Sensitivity/Recall')
-                a5.set_ylabel('Precision')
-            text = 'sentence: %s' % sent
-            ent_to_bbox = get_ent_to_bbox(sent_labels, sent_contexts, bbox_names)
-            for k, v in ent_to_bbox.items():
-                text += '\n' + str(k) + ': ' + str(v)
-            text_a1.text(.0, .5, text, horizontalalignment='left', verticalalignment='bottom')
-            text_a1.set_axis_off()
-            if auroc is not None:
-                text = 'auroc: %f' % auroc
-                text_a2.text(.5, .5, text, horizontalalignment='center', verticalalignment='bottom')
-            text_a2.set_axis_off()
-            if avg_precision is not None:
-                text = 'avg_precision: %f' % avg_precision
-                text_a3.text(.5, .5, text, horizontalalignment='center', verticalalignment='bottom')
-            text_a3.set_axis_off()
-            if path is not None:
-                plt.savefig(os.path.join(path, 'sentence_figures', dicom_sent_id + '.jpg'))
-            figs.append(fig)
-        return figs
+        attn_overlay_func = lambda attn, shape: self.get_attn_overlay(attn, shape, mode=attn_overlay_mode)
+        return plot_info(attn_overlay_func, info, path=path)
 
     def instance_in_dataframe(self, instance, df):
         patient_id = next(iter(instance.keys()))
@@ -384,7 +296,7 @@ class EvaluateLocalization(Callback):
             return dicom_id in df.dicom_id
 
     def evaluate_and_save(self, path=None, instances=None, batch=None, outputs=None, pl_module=None, save_full_data=False,
-                          plot=False):
+                          plot=False, eval_attn_overlay_mode='upsample', plot_attn_overlay_mode='upsample'):
         return_dict = {}
         if path is not None and not os.path.exists(path):
             os.mkdir(path)
@@ -409,11 +321,11 @@ class EvaluateLocalization(Callback):
         info, bbox_names, original_image_shapes, bboxes = self.process_instances(instances)
         if batch is None:
             batch_size = len(info['original_image']) if self.batch_size is None else self.batch_size
-            batches = (
+            batches = [
                 self.gloria_collate_fn.get_batch(
                     info['original_image'][i:i+batch_size], info['sentence'][i:i+batch_size])
                 for i in range(0, len(info['original_image']), batch_size)
-            )
+            ]
         else:
             batches = [batch]
         # add reshaped image to info
@@ -437,11 +349,11 @@ class EvaluateLocalization(Callback):
                 ams = [am[0].mean(0).detach().cpu().numpy() for am in ams]
                 info['attn'].extend(list(ams))
         else:
-            ams = outputs['attn_maps']
+            ams = outputs['attn_maps'].obj
             ams = [am[0].mean(0).detach().cpu().numpy() for am in ams]
             info['attn'].extend(list(ams))
         # evaluate instances
-        info.update(self.evaluate_instances(info, attn_overlay_mode=self.attn_overlay_mode))
+        info.update(self.evaluate_instances(info, attn_overlay_mode=eval_attn_overlay_mode))
         return_dict['info'] = info
         if path is not None and save_full_data:
             # add folder if it doesn't exist
@@ -451,7 +363,7 @@ class EvaluateLocalization(Callback):
             self.save_folder_files(info, path)
         # save generated plots
         if plot:
-            return_dict['figs'] = self.plot_info(info, path=path, attn_overlay_mode=self.attn_overlay_mode)
+            return_dict['figs'] = self.plot_info(info, path=path, attn_overlay_mode=plot_attn_overlay_mode)
         # create and save dataframe
         df = self.info_to_df(info)
         if df_from_file is not None:
@@ -468,7 +380,10 @@ class EvaluateLocalization(Callback):
             # outputs = get_train_outputs(outputs)
             # because crop is random during train, we need to redo the forward pass with deterministic crop
             self.gloria_collate_fn.device = pl_module.device
-            return_dict = self.evaluate_and_save(batch=batch, pl_module=pl_module)
+            return_dict = self.evaluate_and_save(
+                batch=batch, pl_module=pl_module,
+                eval_attn_overlay_mode=self.eval_attn_overlay_mode,
+                plot_attn_overlay_mode=self.plot_attn_overlay_mode)
             df = return_dict['df']
             logger = pl_module.logger.experiment
             if (~df.auroc.isnull()).sum() > 0:
@@ -488,13 +403,18 @@ class EvaluateLocalization(Callback):
         path = os.path.join(self.save_dir, 'val_outputs_%i' % pl_module.current_epoch) \
             if self.save_dir is not None else None
         self.gloria_collate_fn.device = pl_module.device
-        self.evaluate_and_save(path=path, batch=batch, outputs=outputs, pl_module=pl_module)
+        self.evaluate_and_save(
+            path=path, batch=batch, outputs=outputs, pl_module=pl_module, save_full_data=self.val_save_full_data,
+            eval_attn_overlay_mode=self.eval_attn_overlay_mode,
+            plot_attn_overlay_mode=self.plot_attn_overlay_mode)
 
     def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
         path = os.path.join(self.save_dir, 'test_outputs_%i' % pl_module.current_epoch) \
             if self.save_dir is not None else None
         self.gloria_collate_fn.device = pl_module.device
-        self.evaluate_and_save(path=path, batch=batch, outputs=outputs, pl_module=pl_module, save_full_data=True)
+        self.evaluate_and_save(path=path, batch=batch, outputs=outputs, pl_module=pl_module, save_full_data=True,
+            eval_attn_overlay_mode=self.eval_attn_overlay_mode,
+            plot_attn_overlay_mode=self.plot_attn_overlay_mode)
 
     def shared_epoch_end(self, trainer, pl_module, epoch_type):
         path = os.path.join(self.save_dir, '%s_outputs_%i' % (epoch_type, pl_module.current_epoch)) \
@@ -532,7 +452,7 @@ class WeightInstancesByLocalization(Callback):
         self.train_weights = torch.ones(len(self.dm.train))
 
     def get_weight_metric(self, outputs):
-        ams = outputs['attn_maps']
+        ams = outputs['attn_maps'].obj
         ams = torch.stack([am[0].mean(0).detach().cpu() for am in ams])
         if self.weight_mode == 'entropy':
             return discrete_entropy(ams.reshape(ams.shape[0], -1))

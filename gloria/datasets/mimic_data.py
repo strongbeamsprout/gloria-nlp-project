@@ -851,6 +851,15 @@ class ImaGenomeDataset(MimicCxr):
         else:
             sent_id = None
             return_dict = super().__getitem__(item)
+        return_dict = self.add_objects(return_dict, sent_id=sent_id)
+        if sent_id is not None:
+            for subject_id, v1 in return_dict.items():
+                for study_id, v2 in v1.items():
+                    v2['index'] = item
+        return return_dict
+
+
+    def add_objects(self, return_dict, sent_id=None):
         for subject_id, v1 in return_dict.items():
             for study_id, v2 in v1.items():
                 objects = {}
@@ -862,8 +871,6 @@ class ImaGenomeDataset(MimicCxr):
                     if sent_id is not None:
                         # if sent_id is not None, group_by_sentence is True and there is only one image
                         v2['sentence'] = image_objects['sent_to_bboxes'][sent_id]['sentence']
-                        # mark index
-                        v2['index'] = item
                         # register sentence id
                         v2['sent_id'] = sent_id
                     objects[dicom_id] = image_objects

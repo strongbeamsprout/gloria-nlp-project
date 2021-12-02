@@ -53,7 +53,7 @@ class GloriaCollateFn:
         return_dict["cap_lens"] = sorted_cap_lens
         return_dict["imgs"] = imgs[sorted_cap_indices]
         if instances is not None:
-            return_dict['instances'] = instances
+            return_dict['instances'] = [instances[i] for i in sorted_cap_indices]
         return return_dict
 
     # almost completely copied from gloria method

@@ -11,7 +11,7 @@ lightning:
         precision: 16
         reload_dataloaders_every_n_epochs: 1
         limit_train_batches: 0.2
-        limit_val_batches: 0.05
+        limit_val_batches: 0.2
         check_val_every_n_epoch: 1
     checkpoint_callback:
         monitor: 'val_loss'
@@ -28,15 +28,17 @@ lightning:
     logger:
         logger_type: 'WandbLogger'
         save_dir: '/scratch/mcinerney.de/gloria_outputs/'
-        project: 'gloria_v3'
+        project: 'gloria_v2'
     evaluate_localization:
-        attn_overlay_mode: 'upsample'
         log_train_every: 100
 #    weight_instances_by_localization:
 #        weight_mode: 'entropy'
 #        temp: 2.0
 
 model:
+    checkpoint: './pretrained/chexpert_resnet50.ckpt'
+#    checkpoint: '/scratch/mcinerney.de/gloria_outputs/ckpt/gloria_pretrain_1.0/2021_11_29_02_46_26/epoch=3-step=14603.ckpt'
+#    checkpoint: '/scratch/mcinerney.de/gloria_outputs/ckpt/gloria_pretrain_1.0/2021_11_29_15_41_08/epoch=2-step=10952.ckpt'
     gloria:
         local_loss_weight: 1.0
         global_loss_weight: 1.0
@@ -46,7 +48,7 @@ model:
         no_attn_vec: true
 #        sparse_attn_weight: 1.0
     vision:
-        model_name: 'resnet_18'
+        model_name: 'resnet_50'
         freeze_cnn: false
         pretrained: true
     text:
@@ -83,7 +85,7 @@ transforms:
 train:
     update_interval: 1000
     batch_size: 48
-    num_workers: 12
+    num_workers: 0 #12
     nvis: 8
     rand_vis: false 
     optimizer: 

@@ -71,5 +71,11 @@ class PretrainModel(LightningModule):
             logger=True,
             prog_bar=True,
         )
-
+        #attn_maps = [am.detach().cpu().numpy() for am in attn_maps]
+        attn_maps = DummyObjectWrapper(attn_maps)
         return loss, attn_maps, sents
+
+
+class DummyObjectWrapper:
+    def __init__(self, obj):
+        self.obj = obj

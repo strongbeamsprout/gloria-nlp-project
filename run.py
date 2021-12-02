@@ -35,6 +35,9 @@ def get_parser():
         "--train", action="store_true", default=False, help="specify to train model"
     )
     parser.add_argument(
+        "--val", action="store_true", default=False, help="specify to validate model"
+    )
+    parser.add_argument(
         "--test",
         action="store_true",
         default=False,
@@ -97,6 +100,8 @@ def main(cfg, args):
 #         example_batch = next(iter(dm.train_dataloader()))
 #         evaluate_localization.get_windows(example_batch['imgs'][0, 0].shape, gloria=model)
         callbacks.append(evaluate_localization)
+    else:
+        evaluate_localization = None
     if "weight_instances_by_localization" in cfg.lightning:
         callbacks.append(WeightInstancesByLocalization(dm.dm, **cfg.lightning.weight_instances_by_localization))
 
@@ -117,11 +122,18 @@ def main(cfg, args):
 
     if args.train:
         trainer.fit(model, dm)
-    if args.test:
+    if args.val or args.test:
+        if evaluate_localization is not None:
+            evaluate_localization.val_save_full_data = True
         ckpt_path = (
             checkpoint_callback.best_model_path if args.train else cfg.model.checkpoint
         )
-        trainer.test(model=model, datamodule=dm)
+        print('loading from checkpoint:', ckpt_path)
+        model = model.__class__.load_from_checkpoint(ckpt_path)
+        if args.val:
+            trainer.validate(model=model, datamodule=dm, ckpt_path=ckpt_path)
+        if args.test:
+            trainer.test(model=model, datamodule=dm, ckpt_path=ckpt_path)
 
     # save top weights paths to yaml
     if "checkpoint_callback" in cfg.lightning:
@@ -159,6 +171,7 @@ if __name__ == "__main__":
         # set directory names
         cfg.extension = str(args.random_seed) if args.splits != 1 else timestamp
         cfg.output_dir = f"{cfg.base_output_dir}/{cfg.experiment_name}/{cfg.extension}"
+        print('output_dir:', cfg.output_dir)
         cfg.lightning.checkpoint_callback.dirpath = os.path.join(
             cfg.lightning.checkpoint_callback.dirpath,
             f"{cfg.experiment_name}/{cfg.extension}",
