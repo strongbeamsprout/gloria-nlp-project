@@ -4,31 +4,12 @@ phase: 'pretrain'
 lightning:
     trainer:
         gpus: '0'
-        max_epochs: 50
         distributed_backend: 'dp'
-        gradient_clip_val: 0.25
-        lr: 0.00005
         precision: 16
-        reload_dataloaders_every_n_epochs: 1
-        limit_train_batches: 0.2
-        limit_val_batches: 0.2
-        check_val_every_n_epoch: 1
-    checkpoint_callback:
-        monitor: 'val_loss'
-        dirpath: '/scratch/mcinerney.de/gloria_outputs/ckpt'
-        save_last: true 
-        mode: min
-        save_top_k: 10
-    early_stopping_callback:
-        monitor: 'val_loss'
-        min_delta: 0.00
-        patience: 10
-        verbose: false
-        mode: 'min'
     logger:
         logger_type: 'WandbLogger'
-        save_dir: '/scratch/mcinerney.de/gloria_outputs/'
-        project: 'gloria_v2'
+        save_dir: '/scratch/mcinerney.de/gloria_outputs3/'
+        project: 'gloria_v3'
     evaluate_localization:
         log_train_every: 100
 #    weight_instances_by_localization:
@@ -36,19 +17,17 @@ lightning:
 #        temp: 2.0
 
 model:
-    checkpoint: './pretrained/chexpert_resnet50.ckpt'
-#    checkpoint: '/scratch/mcinerney.de/gloria_outputs/ckpt/gloria_pretrain_1.0/2021_11_29_02_46_26/epoch=3-step=14603.ckpt'
-#    checkpoint: '/scratch/mcinerney.de/gloria_outputs/ckpt/gloria_pretrain_1.0/2021_11_29_15_41_08/epoch=2-step=10952.ckpt'
+    checkpoint: './pretrained/chexpert_resnet18.ckpt'
     gloria:
         local_loss_weight: 1.0
         global_loss_weight: 1.0
         temp1: 4.0
         temp2: 5.0
         temp3: 10.0
-        no_attn_vec: true
+        no_attn_vec: false
 #        sparse_attn_weight: 1.0
     vision:
-        model_name: 'resnet_50'
+        model_name: 'resnet_18'
         freeze_cnn: false
         pretrained: true
     text:
@@ -85,9 +64,9 @@ transforms:
 train:
     update_interval: 1000
     batch_size: 48
-    num_workers: 0 #12
+    num_workers: 5
     nvis: 8
-    rand_vis: false 
+    rand_vis: false
     optimizer: 
         name: 'Adam'
         weight_decay: 1e-6
@@ -97,4 +76,4 @@ train:
         inerval: 'epoch'
         frequency: 1
 
-base_output_dir: '/scratch/mcinerney.de/gloria_outputs/output'
+base_output_dir: '/scratch/mcinerney.de/gloria_outputs3/output'

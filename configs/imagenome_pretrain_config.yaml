@@ -15,7 +15,7 @@ lightning:
         check_val_every_n_epoch: 1
     checkpoint_callback:
         monitor: 'val_loss'
-        dirpath: '/scratch/mcinerney.de/gloria_outputs/ckpt'
+        dirpath: '/scratch/mcinerney.de/gloria_outputs3/ckpt'
         save_last: true 
         mode: min
         save_top_k: 10
@@ -27,10 +27,11 @@ lightning:
         mode: 'min'
     logger:
         logger_type: 'WandbLogger'
-        save_dir: '/scratch/mcinerney.de/gloria_outputs/'
+        save_dir: '/scratch/mcinerney.de/gloria_outputs3/'
         project: 'gloria_v3'
     evaluate_localization:
-        attn_overlay_mode: 'upsample'
+        eval_attn_overlay_mode: 'upsample'
+        plot_attn_overlay_mode: 'upsample'
         log_train_every: 100
 #    weight_instances_by_localization:
 #        weight_mode: 'entropy'
@@ -66,9 +67,9 @@ data:
         full_report: true
     image:
         imsize: 256
-    split_slices: ''
+    split_slices: 'train,valid'
     parallel: true
-    get_physio_creds: false
+    get_physio_creds: true
     mimic_cxr_download_directory: '/scratch/mcinerney.de/mimic-cxr'
     imagenome_download_directory: '/scratch/mcinerney.de/imagenome'
     gold_test: false
@@ -95,4 +96,4 @@ train:
         inerval: 'epoch'
         frequency: 1
 
-base_output_dir: '/scratch/mcinerney.de/gloria_outputs/output'
+base_output_dir: '/scratch/mcinerney.de/gloria_outputs3/output'
