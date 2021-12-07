@@ -4,20 +4,44 @@ phase: 'pretrain'
 lightning:
     trainer:
         gpus: '0'
+        max_epochs: 50
         distributed_backend: 'dp'
-        precision: 16
+        gradient_clip_val: 0.25
+        lr: 0.00005
+#        precision: 16
+        reload_dataloaders_every_n_epochs: 1
+        limit_train_batches: 0.2
+        limit_val_batches: 0.05
+        check_val_every_n_epoch: 1
+    checkpoint_callback:
+        monitor: 'val_loss'
+        dirpath: '/scratch/mcinerney.de/gloria_outputs3/ckpt'
+        save_last: true 
+        mode: min
+        save_top_k: 10
+    early_stopping_callback:
+        monitor: 'val_loss'
+        min_delta: 0.00
+        patience: 10
+        verbose: false
+        mode: 'min'
     logger:
         logger_type: 'WandbLogger'
         save_dir: '/scratch/mcinerney.de/gloria_outputs3/'
         project: 'gloria_v3'
     evaluate_localization:
+        eval_attn_overlay_mode: 'upsample'
+        plot_attn_overlay_mode: 'upsample'
         log_train_every: 100
+        val_save_full_data: false
 #    weight_instances_by_localization:
 #        weight_mode: 'entropy'
 #        temp: 2.0
 
 model:
-    checkpoint: './pretrained/chexpert_resnet18.ckpt'
+#    checkpoint: './pretrained/chexpert_resnet50.ckpt'
+#    checkpoint: './pretrained/chexpert_resnet18.ckpt'
+    checkpoint: '/scratch/mcinerney.de/gloria_outputs3/ckpt/gloria_pretrain_1.0/2021_12_03_10_15_30/last.ckpt'
     gloria:
         local_loss_weight: 1.0
         global_loss_weight: 1.0
@@ -25,9 +49,10 @@ model:
         temp2: 5.0
         temp3: 10.0
         no_attn_vec: false
+#        no_attn_loss_weight: 1.0
 #        sparse_attn_weight: 1.0
     vision:
-        model_name: 'resnet_18'
+        model_name: 'resnet_50'
         freeze_cnn: false
         pretrained: true
     text:
@@ -52,9 +77,12 @@ data:
     get_physio_creds: false
     mimic_cxr_download_directory: '/scratch/mcinerney.de/mimic-cxr'
     imagenome_download_directory: '/scratch/mcinerney.de/imagenome'
-    gold_test: false
+    gold_test: true
     randomize_reports: false
     group_by: 'sentence'
+    randomize_objects_mode: 'shuffle_bboxes_sentences'
+#    randomize_objects_mode: 'random_bboxes'
+#    randomize_objects_mode: 'random_sentences'
 
 transforms: 
     norm: 'half'
@@ -64,9 +92,9 @@ transforms:
 train:
     update_interval: 1000
     batch_size: 48
-    num_workers: 5
+    num_workers: 12
     nvis: 8
-    rand_vis: false
+    rand_vis: false 
     optimizer: 
         name: 'Adam'
         weight_decay: 1e-6

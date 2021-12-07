@@ -14,6 +14,8 @@ import wandb
 
 
 def discrete_entropy(dist):
+    # note if no-attn is not turned on, this makes no difference because 1 - dist.sum() = 0
+    dist = torch.cat([get_no_attn_weight(dist).unsqueeze(0), dist], 0)
     return Categorical(dist).entropy()
 
 
@@ -247,6 +249,8 @@ class EvaluateLocalization(Callback):
             'avg_precision',
             'attn_entropy',
             'no_attn_weight',
+            'local_sims',
+            'global_sims',
         ]
         rows = [info[col] for col in columns if col in info.keys()]
         rows = list(zip(*rows))
@@ -340,6 +344,8 @@ class EvaluateLocalization(Callback):
             info['bboxes'].append([new_bboxes[(dicom_id, name)] for name in sent_bbox_names])
         # add attention using model output
         info['attn'] = []
+        info['global_sims'] = []
+        info['local_sims'] = []
         if outputs is None:
             assert pl_module is not None
             for b in batches:
@@ -348,10 +354,22 @@ class EvaluateLocalization(Callback):
                 ams = pl_module.gloria.get_attn_maps(img_emb_l, text_emb_l, sents)
                 ams = [am[0].mean(0).detach().cpu().numpy() for am in ams]
                 info['attn'].extend(list(ams))
+                local_sims = pl_module.gloria.get_local_similarities(img_emb_l, text_emb_l, b['cap_lens'])
+                info['local_sims'].extend(torch.diagonal(local_sims).tolist())
+                global_sims = pl_module.gloria.get_global_similarities(img_emb_g, text_emb_g)
+                info['global_sims'].extend(torch.diagonal(global_sims).tolist())
         else:
+            assert batch is not None
             ams = outputs['attn_maps'].obj
             ams = [am[0].mean(0).detach().cpu().numpy() for am in ams]
             info['attn'].extend(list(ams))
+            dtype = outputs['img_emb_l'].obj.dtype
+            img_emb_l, text_emb_l = outputs['img_emb_l'].obj, outputs['text_emb_l'].obj
+            img_emb_g, text_emb_g = outputs['img_emb_g'].obj, outputs['text_emb_g'].obj
+            local_sims = pl_module.gloria.get_local_similarities(img_emb_l, text_emb_l, batch['cap_lens'])
+            info['local_sims'].extend(torch.diagonal(local_sims).tolist())
+            global_sims = pl_module.gloria.get_global_similarities(img_emb_g, text_emb_g)
+            info['global_sims'].extend(torch.diagonal(global_sims).tolist())
         # evaluate instances
         info.update(self.evaluate_instances(info, attn_overlay_mode=eval_attn_overlay_mode))
         return_dict['info'] = info
@@ -385,19 +403,44 @@ class EvaluateLocalization(Callback):
                 eval_attn_overlay_mode=self.eval_attn_overlay_mode,
                 plot_attn_overlay_mode=self.plot_attn_overlay_mode)
             df = return_dict['df']
-            logger = pl_module.logger.experiment
-            if (~df.auroc.isnull()).sum() > 0:
-                logger.log({"train/auroc_step": df.auroc[~df.auroc.isnull()].mean(),
-                            "global_step": trainer.global_step})
-            if (~df.avg_precision.isnull()).sum() > 0:
-                logger.log({"train/avg_precision_step": df.avg_precision[~df.avg_precision.isnull()].mean(),
-                            "global_step": trainer.global_step})
-            if (~df.attn_entropy.isnull()).sum() > 0:
-                logger.log({"train/attn_entropy_step": df.attn_entropy[~df.attn_entropy.isnull()].mean(),
-                            "global_step": trainer.global_step})
-            if (~df.no_attn_weight.isnull()).sum() > 0:
-                logger.log({"train/no_attn_weight_step": df.no_attn_weight[~df.no_attn_weight.isnull()].mean(),
-                            "global_step": trainer.global_step})
+            if pl_module.logger is not None:
+                logger = pl_module.logger.experiment
+                if (~df.auroc.isnull()).sum() > 0:
+                    logger.log({"train/auroc_step": df.auroc[~df.auroc.isnull()].mean(),
+                                "global_step": trainer.global_step})
+                if (~df.avg_precision.isnull()).sum() > 0:
+                    logger.log({"train/avg_precision_step": df.avg_precision[~df.avg_precision.isnull()].mean(),
+                                "global_step": trainer.global_step})
+                if (~df.attn_entropy.isnull()).sum() > 0:
+                    logger.log({"train/attn_entropy_step": df.attn_entropy[~df.attn_entropy.isnull()].mean(),
+                                "global_step": trainer.global_step})
+                if (~df.no_attn_weight.isnull()).sum() > 0:
+                    logger.log({"train/no_attn_weight_step": df.no_attn_weight[~df.no_attn_weight.isnull()].mean(),
+                                "global_step": trainer.global_step})
+
+    def shared_on_batch_start(self, batch, batch_type):
+        #if self.save_dir is None:
+        #    return
+        #new_batch = {}
+        #path = os.path.join(self.save_dir, '%s_outputs_%i' % (batch_type, pl_module.current_epoch))
+        #if not os.path.exists(os.path.join(path, 'sentences.csv')):
+        #    return
+        #df = pd.read_csv(os.path.join(path, 'sentences.csv'))
+        #dicom_sent_ids = set(df.dicom_sent_id)
+        #indices = []
+        #for i, instance in enumerate(batch['instances']):
+        #    
+        #        if (instance) not in :
+        #            indices.append(i)
+        #indices = torch.tensor(indices)
+        # TODO: update batch
+        pass
+
+    def on_validation_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx):
+        self.shared_on_batch_start(batch, "val")
+
+    def on_test_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx):
+        self.shared_on_batch_start(batch, "test")
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
         path = os.path.join(self.save_dir, 'val_outputs_%i' % pl_module.current_epoch) \
@@ -421,19 +464,20 @@ class EvaluateLocalization(Callback):
             if self.save_dir is not None else None
         if path is not None:
             df = pd.read_csv(os.path.join(path, 'sentences.csv'))
-            logger = pl_module.logger.experiment
-            if (~df.auroc.isnull()).sum() > 0:
-                logger.log({"%s/auroc_step" % epoch_type: df.auroc[~df.auroc.isnull()].mean(),
-                            "global_step": trainer.global_step})
-            if (~df.avg_precision.isnull()).sum() > 0:
-                logger.log({"%s/avg_precision_step" % epoch_type: df.avg_precision[~df.avg_precision.isnull()].mean(),
-                            "global_step": trainer.global_step})
-            if (~df.attn_entropy.isnull()).sum() > 0:
-                logger.log({"%s/attn_entropy_step" % epoch_type: df.attn_entropy[~df.attn_entropy.isnull()].mean(),
-                            "global_step": trainer.global_step})
-            if (~df.no_attn_weight.isnull()).sum() > 0:
-                logger.log({"%s/no_attn_weight_step" % epoch_type: df.no_attn_weight[~df.no_attn_weight.isnull()].mean(),
-                            "global_step": trainer.global_step})
+            if pl_module.logger is not None:
+                logger = pl_module.logger.experiment
+                if (~df.auroc.isnull()).sum() > 0:
+                    logger.log({"%s/auroc_step" % epoch_type: df.auroc[~df.auroc.isnull()].mean(),
+                                "global_step": trainer.global_step})
+                if (~df.avg_precision.isnull()).sum() > 0:
+                    logger.log({"%s/avg_precision_step" % epoch_type: df.avg_precision[~df.avg_precision.isnull()].mean(),
+                                "global_step": trainer.global_step})
+                if (~df.attn_entropy.isnull()).sum() > 0:
+                    logger.log({"%s/attn_entropy_step" % epoch_type: df.attn_entropy[~df.attn_entropy.isnull()].mean(),
+                                "global_step": trainer.global_step})
+                if (~df.no_attn_weight.isnull()).sum() > 0:
+                    logger.log({"%s/no_attn_weight_step" % epoch_type: df.no_attn_weight[~df.no_attn_weight.isnull()].mean(),
+                                "global_step": trainer.global_step})
 
     def on_validation_epoch_end(self, trainer, pl_module):
         self.shared_epoch_end(trainer, pl_module, 'val')
@@ -480,8 +524,9 @@ class WeightInstancesByLocalization(Callback):
         train_weights_softmax = torch.softmax(self.train_weights * self.temp, 0)
         # log entropy or normalized entropy of distribution
         self.dm.weight_instances(train_weights_softmax)
-        logger = pl_module.logger.experiment
-        logger.log({"train/weights_mean": mean,
-                    "train/weights_hist": wandb.Histogram(self.train_weights.numpy()),
-                    "train/weights_softmax_hist": wandb.Histogram(train_weights_softmax.numpy()),
-                    "global_step": trainer.global_step})
+        if pl_module.logger is not None:
+            logger = pl_module.logger.experiment
+            logger.log({"train/weights_mean": mean,
+                        "train/weights_hist": wandb.Histogram(self.train_weights.numpy()),
+                        "train/weights_softmax_hist": wandb.Histogram(train_weights_softmax.numpy()),
+                        "global_step": trainer.global_step})

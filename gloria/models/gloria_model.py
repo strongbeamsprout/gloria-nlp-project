@@ -28,7 +28,8 @@ class GLoRIA(nn.Module):
         self.global_loss = loss.gloria_loss.global_loss
         self.local_loss_weight = self.cfg.model.gloria.local_loss_weight
         self.global_loss_weight = self.cfg.model.gloria.global_loss_weight
-        self.sparse_attn_weight = self.cfg.model.gloria.sparse_attn_weight
+        self.sparse_attn_loss_weight = self.cfg.model.gloria.sparse_attn_loss_weight
+        self.no_attn_loss_weight = self.cfg.model.gloria.no_attn_loss_weight
 #         self.attention_loss_weight = self.cfg.model.gloria.attention_loss_weight
 
         self.temp1 = self.cfg.model.gloria.temp1
@@ -66,6 +67,7 @@ class GLoRIA(nn.Module):
             temp2=self.temp2,
             temp3=self.temp3,
             no_attn_vec=self.no_attn_vec,
+            no_attn_loss_weight=self.no_attn_loss_weight
         )
 
         return l_loss0, l_loss1, attn_maps
@@ -80,7 +82,7 @@ class GLoRIA(nn.Module):
     def calc_loss(self, img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents, attn_labels=None):
 
         l_loss0, l_loss1, attn_maps = self._calc_local_loss(
-            img_emb_l, text_emb_l, sents
+            img_emb_l, text_emb_l, sents,
         )
         g_loss0, g_loss1 = self._calc_global_loss(img_emb_g, text_emb_g)
 
@@ -88,10 +90,16 @@ class GLoRIA(nn.Module):
         loss = 0
         loss += (l_loss0 + l_loss1) * self.local_loss_weight
         loss += (g_loss0 + g_loss1) * self.global_loss_weight
-        if self.sparse_attn_weight is not None:
-            avg_attn_entropy = [Categorical(am[0].mean(0).reshape(-1)).entropy() for am in attn_maps]
+        
+        if self.sparse_attn_loss_weight is not None:
+            avg_attn_entropy = []
+            for am in attn_maps:
+                am_mean = am[0].mean(0).reshape(-1)
+                # note if no-attn is not turned on, this makes no difference because 1 - am_mean.sum() = 0
+                am_mean = torch.cat([1 - am_mean.sum(), am_mean], 0)
+                avg_attn_entropy.append(Categorical(am_mean).entropy())
             sparsity_regularization = sum(avg_attn_entropy) / len(avg_attn_entropy)
-            loss += sparsity_regularization * self.sparse_attn_weight
+            loss += sparsity_regularization * self.sparse_attn_loss_weight
 #         if self.attn_loss_weight is not None:
 #             assert attn_label is not None
 #             loss += self._calc_attn_loss(attn_maps, attn_labels) * self.attn_loss_weight
@@ -132,7 +140,7 @@ class GLoRIA(nn.Module):
             context = img_emb_l  # [48, 768, 19, 19]
 
             weiContext, attn = loss.gloria_loss.attention_fn(
-                word, context, 4.0
+                word, context, 4.0, no_attn_vec=self.no_attn_vec
             )  # [48, 768, 25], [48, 25, 19, 19]
 
             word = word.transpose(1, 2).contiguous()  # [48, 25, 768]

@@ -45,9 +45,10 @@ model:
         temp2: 5.0
         temp3: 10.0
         no_attn_vec: true
+        no_attn_loss_weight: 1.0
 #        sparse_attn_weight: 1.0
     vision:
-        model_name: 'resnet_18'
+        model_name: 'resnet_50'
         freeze_cnn: false
         pretrained: true
     text:
@@ -67,12 +68,12 @@ data:
         full_report: true
     image:
         imsize: 256
-    split_slices: 'train,valid'
+    split_slices: ''
     parallel: true
-    get_physio_creds: true
+    get_physio_creds: false
     mimic_cxr_download_directory: '/scratch/mcinerney.de/mimic-cxr'
     imagenome_download_directory: '/scratch/mcinerney.de/imagenome'
-    gold_test: false
+    gold_test: true
     randomize_reports: false
     group_by: 'sentence'
 

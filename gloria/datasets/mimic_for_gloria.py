@@ -188,9 +188,12 @@ class GloriaCollateFn:
             attention_mask = attention_mask.squeeze().to(device)
             token_type_ids = token_type_ids.squeeze().to(device)
 
-        cap_lens = []
-        for txt in text:
-            cap_lens.append(len([w for w in txt if not w.startswith("[")]))
+        #cap_lens = []
+        #for txt in text:
+        #    cap_lens.append(len([w for w in txt if not w.startswith("[")]))
+        cap_lens = [
+            len([w for w in x["sent"] if not w.startswith("[")]) + 1 for x in processed_text_tensors
+        ]
 
         return {
             "caption_ids": caption_ids,

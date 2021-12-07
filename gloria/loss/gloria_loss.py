@@ -89,13 +89,16 @@ def global_loss(cnn_code, rnn_code, eps=1e-8, temp3=10.0):
 
 
 def local_loss(
-    img_features, words_emb, cap_lens, temp1=4.0, temp2=5.0, temp3=10.0, agg="sum", no_attn_vec=None
+    img_features, words_emb, cap_lens, temp1=4.0, temp2=5.0, temp3=10.0, agg="sum", no_attn_vec=None,
+    no_attn_loss_weight=None
 ):
 
     batch_size = img_features.shape[0]
 
     att_maps = []
     similarities = []
+    if no_attn_loss_weight is not None:
+        no_attn_scores = []
     # cap_lens = cap_lens.data.tolist()
     for i in range(words_emb.shape[0]):
 
@@ -110,6 +113,8 @@ def local_loss(
         weiContext, attn = attention_fn(
             word, context, temp1, no_attn_vec=no_attn_vec
         )  # [48, 768, 25], [48, 25, 19, 19]
+        if no_attn_loss_weight is not None:
+            no_attn_scores.append(torch.log(1 - attn.sum(-1).sum(-1).mean(-1).unsqueeze(-1)))
 
         att_maps.append(
             attn[i].unsqueeze(0).contiguous()
@@ -133,6 +138,9 @@ def local_loss(
         similarities.append(row_sim)
 
     similarities = torch.cat(similarities, 1)  #
+    if no_attn_loss_weight is not None:
+        no_attn_scores = torch.cat(no_attn_scores, 1)  #
+        similarities = similarities + no_attn_loss_weight * no_attn_scores
     similarities = similarities * temp3
     similarities1 = similarities.transpose(0, 1)  # [48, 48]
 

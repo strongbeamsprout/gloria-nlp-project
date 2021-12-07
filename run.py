@@ -129,11 +129,11 @@ def main(cfg, args):
             checkpoint_callback.best_model_path if args.train else cfg.model.checkpoint
         )
         print('loading from checkpoint:', ckpt_path)
-        model = model.__class__.load_from_checkpoint(ckpt_path)
+        model = model.__class__.load_from_checkpoint(ckpt_path, cfg=cfg)
         if args.val:
-            trainer.validate(model=model, datamodule=dm, ckpt_path=ckpt_path)
+            trainer.validate(model=model, datamodule=dm)
         if args.test:
-            trainer.test(model=model, datamodule=dm, ckpt_path=ckpt_path)
+            trainer.test(model=model, datamodule=dm)
 
     # save top weights paths to yaml
     if "checkpoint_callback" in cfg.lightning:

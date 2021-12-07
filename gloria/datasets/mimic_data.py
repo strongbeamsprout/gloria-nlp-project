@@ -789,6 +789,8 @@ class ImaGenomeDataset(MimicCxr):
         self.gold = gold
         if self.gold:
             self.gold_objects_df = self.imagenome_filer.get_gold_file('gold_object_attribute_with_coordinates.txt')
+        else:
+            self.gold_objects_df = None
         self.randomize_objects_mode = randomize_objects_mode
         self.sentences_df = sentences_df
         if self.group_by_sentence:
@@ -804,7 +806,9 @@ class ImaGenomeDataset(MimicCxr):
         while len(neg_parts) < len(objects['sent_to_bboxes']):
             if get_external_negatives:
                 neg_row = self.get_negative_row(self.df[self.df.dicom_id == dicom_id].iloc[0])
-                neg_objects = self.get_objects(neg_row.dicom_id)
+                neg_objects = get_objects(
+                    neg_row.dicom_id, self.gold, gold_objects_df=self.gold_objects_df,
+                    imagenome_filer=self.imagenome_filer)
             else:
                 neg_objects = objects
             for sentence_id, obj in neg_objects['sent_to_bboxes'].items():
@@ -831,7 +835,7 @@ class ImaGenomeDataset(MimicCxr):
             sentence = new_value['sentence']
             for bbox, coord_original, label, context in zip(
                     new_value['bboxes'], new_value['coords_original'], new_value['labels'], new_value['contexts']):
-                self.update_objects(new_objects, bbox, coord_original, sentence_id, sentence, label, context)
+                update_objects(new_objects, bbox, coord_original, sentence_id, sentence, label, context)
             # update with any additional information contained in new_value specifically for the sent_to_bboxes dict
             new_objects['sent_to_bboxes'][sentence_id].update(new_value)
         return new_objects

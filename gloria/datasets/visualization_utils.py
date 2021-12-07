@@ -95,8 +95,8 @@
 #     return ent_to_bbox
 
 
-# def get_ent_to_bbox_from_row(row):
-#     return get_ent_to_bbox(eval(row['sent_labels']), eval(row['sent_contexts']), eval(row['bbox_names']))
+def get_ent_to_bbox_from_row(row):
+    return get_ent_to_bbox(eval(row['sent_labels']), eval(row['sent_contexts']), eval(row['bbox_names']))
 
 
 # def sent_bboxes_to_segmentation_label(shape, sent_bboxes):

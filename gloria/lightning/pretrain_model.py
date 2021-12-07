@@ -25,30 +25,30 @@ class PretrainModel(LightningModule):
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
     def training_step(self, batch, batch_idx):
-        loss, attn_maps, sents = self.shared_step(batch, "train")
+        loss, attn_maps, img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents = self.shared_step(batch, "train")
 
         # get attention map image
         if self.cfg.train.update_interval is not None:
             if batch_idx % self.cfg.train.update_interval == 0:
                 imgs = batch["imgs"].cpu()
                 self.gloria.plot_attn_maps(
-                    attn_maps, imgs, sents, self.current_epoch, batch_idx
+                    attn_maps.obj, imgs, sents, self.current_epoch, batch_idx
                 )
-        return dict(loss=loss, attn_maps=attn_maps, sents=sents)
+        return dict(loss=loss, attn_maps=attn_maps, img_emb_l=img_emb_l, img_emb_g=img_emb_g, text_emb_l=text_emb_l, text_emb_g=text_emb_g, sents=sents)
 
 #     def training_step_end(self, step_outputs):
 #         return step_outputs
 
     def validation_step(self, batch, batch_idx):
-        loss, attn_maps, sents = self.shared_step(batch, "val")
-        return dict(loss=loss, attn_maps=attn_maps, sents=sents)
+        loss, attn_maps, img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents = self.shared_step(batch, "val")
+        return dict(loss=loss, attn_maps=attn_maps, img_emb_l=img_emb_l, img_emb_g=img_emb_g, text_emb_l=text_emb_l, text_emb_g=text_emb_g, sents=sents)
 
 #     def validation_step_end(self, step_outputs):
 #         return step_outputs
 
     def test_step(self, batch, batch_idx):
-        loss, attn_maps, sents = self.shared_step(batch, "test")
-        return dict(loss=loss, attn_maps=attn_maps, sents=sents)
+        loss, attn_maps, img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents = self.shared_step(batch, "test")
+        return dict(loss=loss, attn_maps=attn_maps, img_emb_l=img_emb_l, img_emb_g=img_emb_g, text_emb_l=text_emb_l, text_emb_g=text_emb_g, sents=sents)
 
 #     def test_step_end(self, step_outputs):
 #         return step_outputs
@@ -73,9 +73,14 @@ class PretrainModel(LightningModule):
         )
         #attn_maps = [am.detach().cpu().numpy() for am in attn_maps]
         attn_maps = DummyObjectWrapper(attn_maps)
-        return loss, attn_maps, sents
+        img_emb_l = DummyObjectWrapper(img_emb_l)
+        text_emb_l = DummyObjectWrapper(text_emb_l)
+        img_emb_g = DummyObjectWrapper(img_emb_g)
+        text_emb_g = DummyObjectWrapper(text_emb_g)
+        return loss, attn_maps, img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents
 
 
 class DummyObjectWrapper:
     def __init__(self, obj):
         self.obj = obj
+
