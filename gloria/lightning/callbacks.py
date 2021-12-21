@@ -1,6 +1,6 @@
 from pytorch_lightning.callbacks.base import Callback
 from torchmetrics import Metric
-from torchmetrics.functional import roc, precision_recall_curve, auroc, average_precision
+from torchmetrics.functional import roc, precision_recall_curve, auroc, average_precision, precision_recall, f1
 from torch.distributions.categorical import Categorical
 import copy
 from gloria.datasets.mimic_for_gloria import GloriaCollateFn, normalize, original_tensor_to_numpy_image
@@ -24,13 +24,14 @@ def get_no_attn_weight(dist):
 
 
 class Metrics:
-    def __init__(self):
+    def __init__(self, percentile_thresholds=[.1, .2, .3]):
         self.attn_bbox_metrics = {
             'roc_curve': roc,
             'pr_curve': precision_recall_curve,
             'auroc': auroc,
             'avg_precision': average_precision,
         }
+        self.percentile_thresholds = percentile_thresholds
         self.attn_entropy = discrete_entropy
         self.no_attn_weight = get_no_attn_weight
 
@@ -42,6 +43,22 @@ class Metrics:
                 metrics[k] = v(attn_overlay.reshape(-1), segmentation_label.reshape(-1).long())
             else:
                 metrics[k] = None
+        total = np.prod(segmentation_label.shape)
+        targets = segmentation_label.reshape(-1).long()
+        for p in self.percentile_thresholds:
+            if segmentation_label.sum() > 0:
+                top_k = int(total * p)
+                preds = attn_overlay.reshape(-1)
+                threshold = torch.topk(preds, total - top_k, largest=False).values.max()
+                pr, re = precision_recall(preds, targets, threshold=threshold)
+                f = f1(preds, targets, threshold=threshold)
+                metrics['precision_at_%f' % p] = pr
+                metrics['recall_at_%f' % p] = re
+                metrics['f1_at_%f' % p] = f
+            else:
+                metrics['precision_at_%f' % p] = None
+                metrics['recall_at_%f' % p] = None
+                metrics['f1_at_%f' % p] = None
         return metrics
 
 
@@ -128,7 +145,8 @@ def get_train_outputs(outputs):
 
 class EvaluateLocalization(Callback):
     def __init__(self, gloria_collate_fn, save_dir=None, batch_size=None, eval_attn_overlay_mode='upsample',
-                 plot_attn_overlay_mode='upsample', log_train_every=100, val_save_full_data=False):
+                 plot_attn_overlay_mode='upsample', log_train_every=100, val_save_full_data=False,
+                 percentile_thresholds=[.1, .2, .3]):
         super().__init__()
         self.gloria_collate_fn = gloria_collate_fn
         self.save_dir = save_dir
@@ -136,7 +154,7 @@ class EvaluateLocalization(Callback):
         self.eval_attn_overlay_mode = eval_attn_overlay_mode
         self.plot_attn_overlay_mode = plot_attn_overlay_mode
         self.log_train_every = log_train_every
-        self.metrics = Metrics()
+        self.metrics = Metrics(percentile_thresholds=percentile_thresholds)
         self.shape_to_windows_cache = {}
         self.val_save_full_data = val_save_full_data
 
@@ -252,6 +270,10 @@ class EvaluateLocalization(Callback):
             'local_sims',
             'global_sims',
         ]
+        for p in self.metrics.percentile_thresholds:
+            columns.append('precision_at_%f' % p)
+            columns.append('recall_at_%f' % p)
+            columns.append('f1_at_%f' % p)
         rows = [info[col] for col in columns if col in info.keys()]
         rows = list(zip(*rows))
         df = pd.DataFrame(rows, columns=columns)
@@ -394,7 +416,7 @@ class EvaluateLocalization(Callback):
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
         if pl_module.global_step % self.log_train_every != 0:
             return
-        with torch.no_grad():
+        with torch.no_grad(), torch.cuda.amp.autocast():
             # outputs = get_train_outputs(outputs)
             # because crop is random during train, we need to redo the forward pass with deterministic crop
             self.gloria_collate_fn.device = pl_module.device
@@ -405,18 +427,14 @@ class EvaluateLocalization(Callback):
             df = return_dict['df']
             if pl_module.logger is not None:
                 logger = pl_module.logger.experiment
-                if (~df.auroc.isnull()).sum() > 0:
-                    logger.log({"train/auroc_step": df.auroc[~df.auroc.isnull()].mean(),
-                                "global_step": trainer.global_step})
-                if (~df.avg_precision.isnull()).sum() > 0:
-                    logger.log({"train/avg_precision_step": df.avg_precision[~df.avg_precision.isnull()].mean(),
-                                "global_step": trainer.global_step})
-                if (~df.attn_entropy.isnull()).sum() > 0:
-                    logger.log({"train/attn_entropy_step": df.attn_entropy[~df.attn_entropy.isnull()].mean(),
-                                "global_step": trainer.global_step})
-                if (~df.no_attn_weight.isnull()).sum() > 0:
-                    logger.log({"train/no_attn_weight_step": df.no_attn_weight[~df.no_attn_weight.isnull()].mean(),
-                                "global_step": trainer.global_step})
+                metrics = ['auroc', 'avg_precision', 'attn_entropy', 'no_attn_weight']
+                metrics += ['precision_at_%f' % p for p in self.metrics.percentile_thresholds]
+                metrics += ['recall_at_%f' % p for p in self.metrics.percentile_thresholds]
+                metrics += ['f1_at_%f' % p for p in self.metrics.percentile_thresholds]
+                for metric in metrics:
+                    if (~df[metric].isnull()).sum() > 0:
+                        logger.log({"train/%s_step" % metric: df[metric][~df[metric].isnull()].mean()},
+                                   step=trainer.global_step)
 
     def shared_on_batch_start(self, batch, batch_type):
         #if self.save_dir is None:
@@ -446,18 +464,22 @@ class EvaluateLocalization(Callback):
         path = os.path.join(self.save_dir, 'val_outputs_%i' % pl_module.current_epoch) \
             if self.save_dir is not None else None
         self.gloria_collate_fn.device = pl_module.device
-        self.evaluate_and_save(
-            path=path, batch=batch, outputs=outputs, pl_module=pl_module, save_full_data=self.val_save_full_data,
-            eval_attn_overlay_mode=self.eval_attn_overlay_mode,
-            plot_attn_overlay_mode=self.plot_attn_overlay_mode)
+        with torch.no_grad(), torch.cuda.amp.autocast():
+            self.evaluate_and_save(
+                path=path, batch=batch, outputs=outputs, pl_module=pl_module,
+                save_full_data=self.val_save_full_data,
+                eval_attn_overlay_mode=self.eval_attn_overlay_mode,
+                plot_attn_overlay_mode=self.plot_attn_overlay_mode)
 
     def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
         path = os.path.join(self.save_dir, 'test_outputs_%i' % pl_module.current_epoch) \
             if self.save_dir is not None else None
         self.gloria_collate_fn.device = pl_module.device
-        self.evaluate_and_save(path=path, batch=batch, outputs=outputs, pl_module=pl_module, save_full_data=True,
-            eval_attn_overlay_mode=self.eval_attn_overlay_mode,
-            plot_attn_overlay_mode=self.plot_attn_overlay_mode)
+        with torch.no_grad(), torch.cuda.amp.autocast():
+            self.evaluate_and_save(
+                path=path, batch=batch, outputs=outputs, pl_module=pl_module, save_full_data=True,
+                eval_attn_overlay_mode=self.eval_attn_overlay_mode,
+                plot_attn_overlay_mode=self.plot_attn_overlay_mode)
 
     def shared_epoch_end(self, trainer, pl_module, epoch_type):
         path = os.path.join(self.save_dir, '%s_outputs_%i' % (epoch_type, pl_module.current_epoch)) \
@@ -466,18 +488,14 @@ class EvaluateLocalization(Callback):
             df = pd.read_csv(os.path.join(path, 'sentences.csv'))
             if pl_module.logger is not None:
                 logger = pl_module.logger.experiment
-                if (~df.auroc.isnull()).sum() > 0:
-                    logger.log({"%s/auroc_step" % epoch_type: df.auroc[~df.auroc.isnull()].mean(),
-                                "global_step": trainer.global_step})
-                if (~df.avg_precision.isnull()).sum() > 0:
-                    logger.log({"%s/avg_precision_step" % epoch_type: df.avg_precision[~df.avg_precision.isnull()].mean(),
-                                "global_step": trainer.global_step})
-                if (~df.attn_entropy.isnull()).sum() > 0:
-                    logger.log({"%s/attn_entropy_step" % epoch_type: df.attn_entropy[~df.attn_entropy.isnull()].mean(),
-                                "global_step": trainer.global_step})
-                if (~df.no_attn_weight.isnull()).sum() > 0:
-                    logger.log({"%s/no_attn_weight_step" % epoch_type: df.no_attn_weight[~df.no_attn_weight.isnull()].mean(),
-                                "global_step": trainer.global_step})
+                metrics = ['auroc', 'avg_precision', 'attn_entropy', 'no_attn_weight']
+                metrics += ['precision_at_%f' % p for p in self.metrics.percentile_thresholds]
+                metrics += ['recall_at_%f' % p for p in self.metrics.percentile_thresholds]
+                metrics += ['f1_at_%f' % p for p in self.metrics.percentile_thresholds]
+                for metric in metrics:
+                    if (~df[metric].isnull()).sum() > 0:
+                        logger.log({"%s/%s_epoch" % (epoch_type, metric): df[metric][~df[metric].isnull()].mean()},
+                                   step=trainer.global_step)
 
     def on_validation_epoch_end(self, trainer, pl_module):
         self.shared_epoch_end(trainer, pl_module, 'val')
@@ -490,7 +508,7 @@ class WeightInstancesByLocalization(Callback):
     def __init__(self, dm, weight_mode='entropy', temp=1.):
         self.dm = dm
         self.weight_mode = weight_mode
-        assert self.weight_mode in {'entropy'}
+        assert self.weight_mode in {'entropy', 'no_attn_score'}
         self.temp = temp
         self.weight_mask = torch.zeros(len(self.dm.train), dtype=torch.bool)
         self.train_weights = torch.ones(len(self.dm.train))
@@ -500,6 +518,8 @@ class WeightInstancesByLocalization(Callback):
         ams = torch.stack([am[0].mean(0).detach().cpu() for am in ams])
         if self.weight_mode == 'entropy':
             return discrete_entropy(ams.reshape(ams.shape[0], -1))
+        if self.weight_mode == 'no_attn_score':
+            return -get_no_attn_weight(ams.reshape(ams.shape[0], -1))
         else:
             raise Exception
 

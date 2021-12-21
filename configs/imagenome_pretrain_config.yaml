@@ -15,7 +15,7 @@ lightning:
         check_val_every_n_epoch: 1
     checkpoint_callback:
         monitor: 'val_loss'
-        dirpath: '/scratch/mcinerney.de/gloria_outputs3/ckpt'
+        dirpath: '/scratch/mcinerney.de/gloria_outputs5/ckpt'
         save_last: true 
         mode: min
         save_top_k: 10
@@ -27,15 +27,15 @@ lightning:
         mode: 'min'
     logger:
         logger_type: 'WandbLogger'
-        save_dir: '/scratch/mcinerney.de/gloria_outputs3/'
-        project: 'gloria_v3'
+        save_dir: '/scratch/mcinerney.de/gloria_outputs5/'
+        project: 'gloria_v5'
     evaluate_localization:
         eval_attn_overlay_mode: 'upsample'
         plot_attn_overlay_mode: 'upsample'
         log_train_every: 100
 #    weight_instances_by_localization:
-#        weight_mode: 'entropy'
-#        temp: 2.0
+#        weight_mode: 'no_attn_score'
+#        temp: .2
 
 model:
     gloria:
@@ -44,8 +44,9 @@ model:
         temp1: 4.0
         temp2: 5.0
         temp3: 10.0
-        no_attn_vec: true
-        no_attn_loss_weight: 1.0
+        no_attn_vec: false
+#         no_attn_loss_weight: 1.0
+#         attention_divergence_loss_weight: 1.0
 #        sparse_attn_weight: 1.0
     vision:
         model_name: 'resnet_50'
@@ -59,6 +60,10 @@ model:
         embedding_dim: 768
         freeze_bert: false
         agg_tokens: true
+#     num_image_position_embeddings: 19
+#     image_transformer:
+#         num_heads: 12
+#         num_layers: 1
 
 data:
     dataset: imagenome
@@ -76,6 +81,8 @@ data:
     gold_test: true
     randomize_reports: false
     group_by: 'sentence'
+#     randomize_objects_mode: 'random_sentences'
+    limit_to: 'abnormal'
 
 transforms: 
     norm: 'half'
@@ -97,4 +104,4 @@ train:
         inerval: 'epoch'
         frequency: 1
 
-base_output_dir: '/scratch/mcinerney.de/gloria_outputs3/output'
+base_output_dir: '/scratch/mcinerney.de/gloria_outputs5/output'

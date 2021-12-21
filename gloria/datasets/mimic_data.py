@@ -778,9 +778,76 @@ def get_objects(dicom_id, gold, gold_objects_df=None, imagenome_filer=None):
     return objects
 
 
+def save_and_get_all_location_condition_pairs(dataset, filename):
+    if not os.path.exists(filename):
+        location_condition_pairs = {
+            'location_to_condition': {},
+            'condition_to_location': {}
+        }
+        for i in tqdm(range(len(dataset)), total=len(dataset)):
+            instance = dataset[i]
+            patient_id = next(iter(instance.keys()))
+            study_id = next(iter(instance[patient_id].keys()))
+            dicom_id = next(iter(instance[patient_id][study_id]['images'].keys()))
+        #     print(dicom_id)d
+            for k, v in instance[patient_id][study_id]['objects'][dicom_id]['sent_to_bboxes'].items():
+                sent_condition_to_locations = {}
+                for label, context, bbox in zip(v['labels'], v['contexts'], v['bboxes']):
+                    if (label, context) not in sent_condition_to_locations.keys():
+                        sent_condition_to_locations[(label, context)] = set()
+                    sent_condition_to_locations[(label, context)].add(bbox)
+                for (label, context), bboxes in sent_condition_to_locations.items():
+                    bboxes = tuple(sorted(list(bboxes)))
+                    if (label, context) not in location_condition_pairs['condition_to_location'].keys():
+                        location_condition_pairs['condition_to_location'][(label, context)] = set()
+                    location_condition_pairs['condition_to_location'][(label, context)].add(bboxes)
+                    if bboxes not in location_condition_pairs['location_to_condition'].keys():
+                        location_condition_pairs['location_to_condition'][bboxes] = set()
+                    location_condition_pairs['location_to_condition'][bboxes].add((label, context))
+        with open(filename, 'wb') as f:
+            pkl.dump(location_condition_pairs, f)
+    else:
+        with open(filename, 'rb') as f:
+            location_condition_pairs = pkl.load(f)
+    return location_condition_pairs
+
+
+class GenerateContextLocationConditionSentences:
+    def __call__(self, conditions, contexts, locations):
+        condition_to_locations = {}
+        for context, loc, condition in zip(contexts, locations, conditions):
+            if condition not in condition_to_locations.keys():
+                condition_to_locations[condition] = []
+            if context == 'yes':
+                condition_to_locations[condition].append(loc)
+        sentence = ''
+        for cond, locs in condition_to_locations.items():
+            new_locs = set()
+            for loc in locs:
+                if ('left' in loc or 'right' in loc) and \
+                (loc.replace('left', 'right') in locs or loc.replace('right', 'left') in locs):
+                    new_locs.add(loc.replace('left ', '').replace('right ', '') + 's')
+                else:
+                    new_locs.add(loc)
+            new_locs = list(new_locs)
+            if len(locs) == 0:
+                sentence += ' There is no ' + cond + '.'
+            else:
+                if len(new_locs) > 2:
+                    loclist = ', '.join(new_locs[:-1]) + ', and ' + new_locs[-1]
+                else:
+                    loclist = ' and '.join(new_locs)
+                if cond == 'normal' or cond == 'abnormal':
+                    sentence += ' The ' + loclist + (' are ' if len(locs) > 1 else ' is ') + cond + '.'
+                else:
+                    sentence += ' There is ' + cond + ' in the ' + loclist + '.'
+        return sentence.strip()
+
+
 class ImaGenomeDataset(MimicCxr):
     def __init__(self, df, mimic_cxr_filer, imagenome_filer, group_by='sentence', gold=False, randomize_reports=False,
-                 randomize_objects_mode=None, sentences_df=None):
+                 randomize_objects_mode=None, sentences_df=None, sentence_selector=None, swap_left_right=False,
+                 swap_left_right_coords=False, generate_sent=False, swap_conditions=False, valid_locations_conditions=None):
         self.group_by_sentence = group_by == 'sentence'
         if self.group_by_sentence:
             group_by = 'image'
@@ -795,6 +862,26 @@ class ImaGenomeDataset(MimicCxr):
         self.sentences_df = sentences_df
         if self.group_by_sentence:
             assert self.sentences_df is not None
+        self.sentence_selector = sentence_selector
+        if self.sentence_selector is not None:
+            assert self.group_by_sentence
+            self.sentences_df = self.sentences_df[self.sentences_df.apply(self.sentence_selector, axis=1)]
+        self.swap_left_right = swap_left_right
+        if self.swap_left_right:
+            assert self.group_by_sentence
+        self.swap_left_right_coords = swap_left_right_coords
+        if self.swap_left_right_coords:
+            assert self.group_by_sentence and randomize_objects_mode is None
+        self.generate_sent = generate_sent
+        if self.generate_sent:
+            assert self.group_by_sentence and not self.swap_left_right
+            self.sentence_generator = GenerateContextLocationConditionSentences()
+        else:
+            self.sentence_generator = None
+        self.swap_conditions = swap_conditions
+        self.valid_locations_conditions = valid_locations_conditions
+        if self.swap_conditions:
+            assert self.generate_sent and self.valid_locations_conditions is not None
 
     def get_negative_parts_for_objects(self, objects, get_external_negatives=False, part_type='bbox', dicom_id=None):
         assert part_type in {'sentence', 'bbox'}
@@ -840,6 +927,9 @@ class ImaGenomeDataset(MimicCxr):
             new_objects['sent_to_bboxes'][sentence_id].update(new_value)
         return new_objects
 
+    def swap_left_right_coords(self, objects):
+        raise NotImplementedError
+
     def __len__(self):
         if self.group_by_sentence:
             return len(self.sentences_df)
@@ -862,6 +952,26 @@ class ImaGenomeDataset(MimicCxr):
                     v2['index'] = item
         return return_dict
 
+    def get_swapped_conditions(self, labels, contexts, bboxes):
+        condition_to_locations = {}
+        for label, context, bbox in zip(labels, contexts, bboxes):
+            if (label, context) not in condition_to_locations.keys():
+                condition_to_locations[(label, context)] = set()
+            condition_to_locations[(label, context)].add(bbox)
+        new_labels, new_contexts, new_bboxes = [], [], []
+        for (label, context), bboxes in condition_to_locations.items():
+            bboxes = tuple(sorted(list(bboxes)))
+            potential_conditions = self.valid_locations_conditions['location_to_condition'][bboxes]
+            potential_conditions = potential_conditions.difference(condition_to_locations.keys())
+            if len(potential_conditions) > 0:
+                potential_conditions = list(potential_conditions)
+                random.shuffle(potential_conditions)
+                label, context = potential_conditions[0]
+            for bbox in bboxes:
+                new_labels.append(label)
+                new_contexts.append(context)
+                new_bboxes.append(bbox)
+        return new_labels, new_contexts, new_bboxes
 
     def add_objects(self, return_dict, sent_id=None):
         for subject_id, v1 in return_dict.items():
@@ -872,9 +982,26 @@ class ImaGenomeDataset(MimicCxr):
                     if self.randomize_objects_mode is not None:
                         image_objects = self.randomize_objects(
                             image_objects, dicom_id=dicom_id, mode=self.randomize_objects_mode)
+                    if self.swap_left_right_coords:
+                        image_objects = self.swap_left_right_coords(image_objects)
                     if sent_id is not None:
                         # if sent_id is not None, group_by_sentence is True and there is only one image
-                        v2['sentence'] = image_objects['sent_to_bboxes'][sent_id]['sentence']
+                        sent_label = image_objects['sent_to_bboxes'][sent_id]
+                        if self.generate_sent:
+                            labels = sent_label['labels']
+                            contexts = sent_label['contexts']
+                            bboxes = sent_label['bboxes']
+                            if self.swap_conditions:
+                                labels, contexts, bboxes = self.get_swapped_conditions(labels, contexts, bboxes)
+                            sent = self.sentence_generator(labels, contexts, bboxes)
+                        else:
+                            sent = sent_label['sentence']
+                            if self.swap_left_right:
+                                sent = sent.replace(
+                                    'right', 'right*****').replace(
+                                    'left', 'right').replace(
+                                    'right*****', 'left')
+                        v2['sentence'] = sent
                         # register sentence id
                         v2['sent_id'] = sent_id
                     objects[dicom_id] = image_objects
@@ -882,11 +1009,60 @@ class ImaGenomeDataset(MimicCxr):
         return return_dict
 
 
+class RowContainsOrDoesNotContainSelector:
+    def __init__(self, contains=None, does_not_contain=None, only_contains=False):
+        assert contains is not None or does_not_contain is not None
+        if only_contains:
+            assert does_not_contain is None
+        self.contains = set(contains) if contains is not None else None
+        self.does_not_contain = set(does_not_contain) if does_not_contain is not None else None
+        self.only_contains = only_contains
+
+    def get_row_set(self, row):
+        raise NotImplementedError
+
+    def __call__(self, row):
+        row_set = self.get_row_set(row)
+        if self.only_contains:
+            return self.contains == row_set
+        else:
+            return_bool = True
+            if self.contains is not None:
+                return_bool = return_bool and len(self.contains - row_set) == 0
+            if self.does_not_contain is not None:
+                return_bool = return_bool and len(row_set - self.does_not_contain) == len(row_set)
+            return return_bool
+
+
+def get_ent_to_bbox(sent_labels, sent_contexts, sent_bbox_names):
+    ent_to_bbox = {}
+    for label, context, bbox in zip(sent_labels, sent_contexts, sent_bbox_names):
+        if (label, context) not in ent_to_bbox.keys():
+            ent_to_bbox[(label, context)] = set()
+        ent_to_bbox[(label, context)].add(bbox)
+    return ent_to_bbox
+
+
+def get_ent_to_bbox_from_row(row):
+    return get_ent_to_bbox(eval(row['sent_labels']), eval(row['sent_contexts']), eval(row['bbox_names']))
+
+
+class RowLabelAndContextSelector(RowContainsOrDoesNotContainSelector):
+    def get_row_set(self, row):
+        return set(get_ent_to_bbox_from_row(row).keys())
+
+
+class RowBBoxSelector(RowContainsOrDoesNotContainSelector):
+    def get_row_set(self, row):
+        return set(eval(row['bbox_names']))
+
+
 class ImaGenomeDataModule(BaseDataModule):
     def __init__(self, mimic_cxr_filer, imagenome_filer, batch_size=1, num_workers=0, collate_fn=default_collate_fn,
                  get_images=True, get_reports=True, force=False, parallel=False,
                  num_preprocessing_workers=os.cpu_count(), chunksize=1, split_slices='train,valid,test,gold', gold_test=False,
-                 randomize_reports=False, randomize_objects_mode=None, group_by='sentence', **kwargs):
+                 limit_to=None, randomize_reports=False, randomize_objects_mode=None, swap_left_right=False,
+                 generate_sent=False, swap_conditions=False, group_by='sentence', **kwargs):
         super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn, **kwargs)
         self.mimic_cxr_filer = mimic_cxr_filer
         self.imagenome_filer = imagenome_filer
@@ -910,8 +1086,12 @@ class ImaGenomeDataModule(BaseDataModule):
             assert key in {'train', 'valid', 'test', 'gold'}
             self.split_slices[key] = value
         self.gold_test = gold_test
+        self.limit_to = limit_to
         self.randomize_reports = randomize_reports
         self.randomize_objects_mode = randomize_objects_mode
+        self.swap_left_right = swap_left_right
+        self.generate_sent = generate_sent
+        self.swap_conditions = swap_conditions
         self.group_by = group_by
 
     def get_kwargs(self, records):
@@ -980,7 +1160,15 @@ class ImaGenomeDataModule(BaseDataModule):
             subject_ids = set(split_df.subject_id)
             new_records = self.process_records(split_df, subject_ids)
             sent_ids = []
-            sent_ids_df = {'sent_id': [], 'dicom_id': []}
+            sent_ids_df = {
+                'dicom_sent_id': [],
+                'patient_id': [],
+                'sent_id': [],
+                'dicom_id': [],
+                'sent_labels': [],
+                'sent_contexts': [],
+                'bbox_names': []
+            }
             print('Preprocessing objects')
             for i, row in tqdm(new_records.iterrows(), total=len(new_records)):
                 if os.path.exists(self.imagenome_filer.get_objects_file(row.dicom_id)):
@@ -992,21 +1180,40 @@ class ImaGenomeDataModule(BaseDataModule):
                 sent_ids.append(sorted(list(objects['sent_to_bboxes'].keys()), key=lambda x: float(x.split('|')[1])))
                 sent_ids_df['sent_id'].extend(sent_ids[-1])
                 sent_ids_df['dicom_id'].extend([row.dicom_id] * len(sent_ids[-1]))
+                sent_ids_df['patient_id'].extend([row.subject_id] * len(sent_ids[-1]))
+                for sent_id in sent_ids[-1]:
+                    sent_ids_df['dicom_sent_id'].append('dicom_%s_sent_%s' % (row.dicom_id, sent_id))
+                    sent_label = objects['sent_to_bboxes'][sent_id]
+                    sent_ids_df['sent_labels'].append(sent_label['labels'])
+                    sent_ids_df['sent_contexts'].append(sent_label['contexts'])
+                    sent_ids_df['bbox_names'].append(sent_label['bboxes'])
             new_records['sent_ids'] = sent_ids
             new_records.to_csv(self.imagenome_filer.get_full_path('%s_subset.csv' % k))
             pd.DataFrame(sent_ids_df).to_csv(self.imagenome_filer.get_full_path('%s_sentences.csv' % k))
+        save_and_get_all_location_condition_pairs(
+            self.get_dataset('gold', generate_sent=False, swap_conditions=False),
+            self.imagenome_filer.get_full_path('valid_locations_and_conditions.pkl'))
         self.data_prepared = True
 
     def get_dataset(self, split, **kwargs):
-        if 'randomize_reports' not in kwargs.keys():
-            kwargs['randomize_reports'] = self.randomize_reports
-        if 'randomize_objects_mode' not in kwargs.keys():
-            kwargs['randomize_objects_mode'] = self.randomize_objects_mode
+        for k in ['limit_to', 'randomize_reports', 'randomize_objects_mode', 'swap_left_right', 'generate_sent',
+                  'swap_conditions', 'group_by']:
+            if k not in kwargs.keys():
+                kwargs[k] = getattr(self, k)
+        if kwargs['limit_to'] is None:
+            kwargs['sentence_selector'] = None
+        elif kwargs['limit_to'] == 'abnormal':
+            kwargs['sentence_selector'] = RowLabelAndContextSelector(contains={('abnormal', 'yes')})
+        else:
+            raise Exception
+        del kwargs['limit_to']
+        kwargs['gold'] = split == 'gold'
         split_df = pd.read_csv(self.imagenome_filer.get_full_path('%s_subset.csv' % split))
-        sentences_df = pd.read_csv(self.imagenome_filer.get_full_path('%s_sentences.csv' % split))
-        return ImaGenomeDataset(
-            split_df, self.mimic_cxr_filer, self.imagenome_filer, gold=split=='gold', group_by=self.group_by,
-            sentences_df=sentences_df, **kwargs)
+        kwargs['sentences_df'] = pd.read_csv(self.imagenome_filer.get_full_path('%s_sentences.csv' % split))
+        if kwargs['generate_sent'] and kwargs['swap_conditions']:
+            with open(self.imagenome_filer.get_full_path('valid_locations_and_conditions.pkl'), 'rb') as f:
+                kwargs['valid_locations_conditions'] = pkl.load(f)
+        return ImaGenomeDataset(split_df, self.mimic_cxr_filer, self.imagenome_filer, **kwargs)
 
     def setup(self, stage=None):
         if stage == 'fit' or stage is None:

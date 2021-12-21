@@ -88,9 +88,13 @@ def global_loss(cnn_code, rnn_code, eps=1e-8, temp3=10.0):
     return loss0, loss1
 
 
+def kl_divergence(attn1, attn2):
+    return (attn1 * torch.log(attn1 / attn2)).sum(-1)
+
+
 def local_loss(
     img_features, words_emb, cap_lens, temp1=4.0, temp2=5.0, temp3=10.0, agg="sum", no_attn_vec=None,
-    no_attn_loss_weight=None
+    no_attn_loss_weight=None, attention_divergence_loss_weight=None
 ):
 
     batch_size = img_features.shape[0]
@@ -99,6 +103,8 @@ def local_loss(
     similarities = []
     if no_attn_loss_weight is not None:
         no_attn_scores = []
+    if attention_divergence_loss_weight is not None:
+        kl_divergences = []
     # cap_lens = cap_lens.data.tolist()
     for i in range(words_emb.shape[0]):
 
@@ -115,6 +121,17 @@ def local_loss(
         )  # [48, 768, 25], [48, 25, 19, 19]
         if no_attn_loss_weight is not None:
             no_attn_scores.append(torch.log(1 - attn.sum(-1).sum(-1).mean(-1).unsqueeze(-1)))
+        if attention_divergence_loss_weight is not None:
+            flattened_attn = attn.reshape(*attn.shape[:2], -1).mean(1)
+            if no_attn_vec is not None:
+                flattened_attn = torch.cat(
+                    [1 - flattened_attn.sum(-1, keepdims=True), flattened_attn], -1)
+            current_attn = flattened_attn[i].expand(batch_size, *flattened_attn[i].shape)
+            symmetric_kl = (
+                kl_divergence(current_attn, flattened_attn) +
+                kl_divergence(flattened_attn, current_attn)
+            ) / 2
+            kl_divergences.append(symmetric_kl.unsqueeze(1))
 
         att_maps.append(
             attn[i].unsqueeze(0).contiguous()
@@ -140,7 +157,10 @@ def local_loss(
     similarities = torch.cat(similarities, 1)  #
     if no_attn_loss_weight is not None:
         no_attn_scores = torch.cat(no_attn_scores, 1)  #
-        similarities = similarities + no_attn_loss_weight * no_attn_scores
+        similarities = similarities - no_attn_loss_weight * no_attn_scores
+    if attention_divergence_loss_weight is not None:
+        kl_divergences = torch.cat(kl_divergences, 1)
+        similarities = similarities - attention_divergence_loss_weight * kl_divergences
     similarities = similarities * temp3
     similarities1 = similarities.transpose(0, 1)  # [48, 48]
 

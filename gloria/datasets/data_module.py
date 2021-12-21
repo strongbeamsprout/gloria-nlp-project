@@ -85,8 +85,12 @@ class ImaGenomeDataModule(pl.LightningDataModule):
             num_workers=self.cfg.train.num_workers, collate_fn=collate_fn,
             get_images=True, get_reports=True, force=False, parallel=self.cfg.data.parallel,
             num_preprocessing_workers=os.cpu_count(), chunksize=1,
-            split_slices=self.cfg.data.split_slices, gold_test=self.cfg.data.gold_test, randomize_reports=cfg.data.randomize_reports,
+            split_slices=self.cfg.data.split_slices, gold_test=self.cfg.data.gold_test,
+            limit_to=self.cfg.data.limit_to,
+            randomize_reports=cfg.data.randomize_reports,
             randomize_objects_mode=self.cfg.data.randomize_objects_mode,
+            swap_left_right=self.cfg.data.swap_left_right,
+            generate_sent=self.cfg.data.generate_sent, swap_conditions=self.cfg.data.swap_conditions,
             group_by=self.cfg.data.group_by, drop_last=True, pin_memory=True)
         self.prepare_data()
 

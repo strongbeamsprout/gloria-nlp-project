@@ -14,6 +14,34 @@ from nltk.tokenize import RegexpTokenizer
 from torch.distributions.categorical import Categorical
 
 
+class PositionEmbeddings(nn.Module):
+    def __init__(self, num_positions, hidden_size, num_spatial_dims=1):
+        super().__init__()
+        self.num_positions = num_positions
+        self.hidden_size = hidden_size
+        self.num_spatial_dims = num_spatial_dims
+        self.image_position_embeddings = nn.Embedding(num_positions, hidden_size // num_spatial_dims)
+
+    def forward(self, spatial_shape):
+        if isinstance(spatial_shape, int):
+            spatial_shape = (spatial_shape,) * self.num_spatial_dims
+        for d in spatial_shape:
+            assert d <= self.num_positions
+        device = next(iter(self.image_position_embeddings.parameters())).device
+        pos_embeddings = [self.image_position_embeddings(torch.arange(d, device=device)) for d in spatial_shape]
+        pos_dim = pos_embeddings[0].shape[-1]
+        pos_embeddings = [
+            emb.reshape(
+                *(1 if i != j else d for j, d in enumerate(spatial_shape)), pos_dim
+            ).expand(*spatial_shape, pos_dim)
+            for i, emb in enumerate(pos_embeddings)]
+        padding = torch.zeros(
+            *spatial_shape, self.hidden_size - len(spatial_shape) * pos_dim,
+            device=device)
+        positions = torch.cat(pos_embeddings + [padding], -1)
+        return positions
+
+
 class GLoRIA(nn.Module):
     def __init__(self, cfg):
         super(GLoRIA, self).__init__()
@@ -21,6 +49,14 @@ class GLoRIA(nn.Module):
         self.cfg = cfg
         self.text_encoder = builder.build_text_model(cfg)
         self.img_encoder = builder.build_img_model(cfg)
+        self.position_embeddings = PositionEmbeddings(
+            self.cfg.model.num_image_position_embeddings, self.cfg.model.text.embedding_dim, num_spatial_dims=2) \
+            if self.cfg.model.num_image_position_embeddings is not None else None
+        self.image_transformer = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                self.cfg.model.text.embedding_dim, self.cfg.model.image_transformer.num_heads),
+            self.cfg.model.image_transformer.num_layers) \
+            if "image_transformer" in self.cfg.model.keys() else None
         self.no_attn_vec = nn.Parameter(torch.randn(self.cfg.model.text.embedding_dim)) \
             if self.cfg.model.gloria.no_attn_vec else None
 
@@ -30,6 +66,7 @@ class GLoRIA(nn.Module):
         self.global_loss_weight = self.cfg.model.gloria.global_loss_weight
         self.sparse_attn_loss_weight = self.cfg.model.gloria.sparse_attn_loss_weight
         self.no_attn_loss_weight = self.cfg.model.gloria.no_attn_loss_weight
+        self.attention_divergence_loss_weight = self.cfg.model.gloria.attention_divergence_loss_weight
 #         self.attention_loss_weight = self.cfg.model.gloria.attention_loss_weight
 
         self.temp1 = self.cfg.model.gloria.temp1
@@ -51,7 +88,17 @@ class GLoRIA(nn.Module):
         img_emb_g, img_emb_l = self.img_encoder.generate_embeddings(
             img_feat_g, img_emb_l
         )
-
+        
+        b, c, h, w = img_emb_l.shape
+        if self.position_embeddings is not None:
+            pos_embeddings = self.position_embeddings((h, w))
+            pos_embeddings = pos_embeddings.permute(2, 0, 1).expand(b, c, h, w)
+            img_emb_l = img_emb_l + pos_embeddings
+        if self.image_transformer is not None:
+            img_emb_l_flattened = img_emb_l.reshape(b, c, h * w).permute(2, 0, 1)
+            img_emb_l_flattened = self.image_transformer(img_emb_l_flattened)
+            img_emb_l = img_emb_l_flattened.permute(1, 2, 0).reshape(b, c, h, w)
+        
         return img_emb_l, img_emb_g
 
     def _calc_local_loss(self, img_emb_l, text_emb_l, sents):
@@ -67,7 +114,8 @@ class GLoRIA(nn.Module):
             temp2=self.temp2,
             temp3=self.temp3,
             no_attn_vec=self.no_attn_vec,
-            no_attn_loss_weight=self.no_attn_loss_weight
+            no_attn_loss_weight=self.no_attn_loss_weight,
+            attention_divergence_loss_weight=self.attention_divergence_loss_weight
         )
 
         return l_loss0, l_loss1, attn_maps
