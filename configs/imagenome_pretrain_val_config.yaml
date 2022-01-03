@@ -40,16 +40,16 @@ lightning:
 
 model:
 #    checkpoint: './pretrained/chexpert_resnet18.ckpt'
-    checkpoint: './pretrained/chexpert_resnet50.ckpt
-#    checkpoint: './pretrained/retrained_abnormal_best_epoch10.ckpt
-#    checkpoint: './pretrained/retrained_abnormal_last_epoch20.ckpt
-#    checkpoint: './pretrained/retrained_best_epoch6.ckpt
-#    checkpoint: './pretrained/retrained_kl_best_epoch11.ckpt
-#    checkpoint: './pretrained/retrained_kl_last_epoch19.ckpt
-#    checkpoint: './pretrained/retrained_last_epoch16.ckpt
-#    checkpoint: './pretrained/retrained_pos_last_epoch27.ckpt
-#    checkpoint: './pretrained/retrained_randsent_last_epoch10.ckpt
-#    checkpoint: './pretrained/retrained_transformer_last_epoch19.ckpt
+    checkpoint: './pretrained/chexpert_resnet50.ckpt'
+#    checkpoint: './pretrained/retrained_abnormal_best_epoch10.ckpt'
+#    checkpoint: './pretrained/retrained_abnormal_last_epoch20.ckpt'
+#    checkpoint: './pretrained/retrained_best_epoch6.ckpt'
+#    checkpoint: './pretrained/retrained_kl_best_epoch11.ckpt'
+#    checkpoint: './pretrained/retrained_kl_last_epoch19.ckpt'
+#    checkpoint: './pretrained/retrained_last_epoch16.ckpt'
+#    checkpoint: './pretrained/retrained_pos_last_epoch27.ckpt'
+#    checkpoint: './pretrained/retrained_randsent_last_epoch10.ckpt'
+#    checkpoint: './pretrained/retrained_transformer_last_epoch19.ckpt'
     gloria:
         local_loss_weight: 1.0
         global_loss_weight: 1.0
