@@ -15,7 +15,7 @@ from torch.distributions.categorical import Categorical
 
 
 class PositionEmbeddings(nn.Module):
-    def __init__(self, num_positions, hidden_size, num_spatial_dims=1):
+    def __init__(self, num_positions, hidden_size, num_spatial_dims=1, init_std=1):
         super().__init__()
         self.num_positions = num_positions
         self.hidden_size = hidden_size

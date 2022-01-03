@@ -24,7 +24,7 @@ def get_no_attn_weight(dist):
 
 
 class Metrics:
-    def __init__(self, percentile_thresholds=[.1, .2, .3]):
+    def __init__(self, percentile_thresholds=[.05, .1, .2, .3]):
         self.attn_bbox_metrics = {
             'roc_curve': roc,
             'pr_curve': precision_recall_curve,
@@ -52,13 +52,17 @@ class Metrics:
                 threshold = torch.topk(preds, total - top_k, largest=False).values.max()
                 pr, re = precision_recall(preds, targets, threshold=threshold)
                 f = f1(preds, targets, threshold=threshold)
+                iou = ((preds > threshold) & (targets == 1)).float().sum(-1) / \
+                      ((preds > threshold) | (targets == 1)).float().sum(-1)
                 metrics['precision_at_%f' % p] = pr
                 metrics['recall_at_%f' % p] = re
                 metrics['f1_at_%f' % p] = f
+                metrics['iou_at_%f' % p] = iou
             else:
                 metrics['precision_at_%f' % p] = None
                 metrics['recall_at_%f' % p] = None
                 metrics['f1_at_%f' % p] = None
+                metrics['iou_at_%f' % p] = None
         return metrics
 
 
@@ -146,7 +150,7 @@ def get_train_outputs(outputs):
 class EvaluateLocalization(Callback):
     def __init__(self, gloria_collate_fn, save_dir=None, batch_size=None, eval_attn_overlay_mode='upsample',
                  plot_attn_overlay_mode='upsample', log_train_every=100, val_save_full_data=False,
-                 percentile_thresholds=[.1, .2, .3]):
+                 percentile_thresholds=[.05, .1, .2, .3]):
         super().__init__()
         self.gloria_collate_fn = gloria_collate_fn
         self.save_dir = save_dir
@@ -221,7 +225,7 @@ class EvaluateLocalization(Callback):
             for i, sent_id in enumerate(sent_ids):
                 dicom_sent_id = 'dicom_%s_sent_%s' % (dicom_id, sent_id)
                 sent_info = instance['objects'][dicom_id]['sent_to_bboxes'][sent_id]
-                sent = sent_info['sentence']
+                sent = instance['sentence'] if 'sent_id' in instance.keys() else sent_info['sentence']
                 info['dicom_sent_id'].append(dicom_sent_id)
                 info['patient_id'].append(patient_id)
                 info['study_id'].append(study_id)
@@ -274,6 +278,7 @@ class EvaluateLocalization(Callback):
             columns.append('precision_at_%f' % p)
             columns.append('recall_at_%f' % p)
             columns.append('f1_at_%f' % p)
+            columns.append('iou_at_%f' % p)
         rows = [info[col] for col in columns if col in info.keys()]
         rows = list(zip(*rows))
         df = pd.DataFrame(rows, columns=columns)

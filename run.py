@@ -1,3 +1,4 @@
+import spacy
 import argparse
 import torch
 import gloria

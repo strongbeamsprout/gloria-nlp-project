@@ -15,7 +15,7 @@ lightning:
         check_val_every_n_epoch: 1
     checkpoint_callback:
         monitor: 'val_loss'
-        dirpath: '/scratch/mcinerney.de/gloria_outputs4/ckpt'
+        dirpath: '/scratch/mcinerney.de/gloria_outputs6/ckpt'
         save_last: true 
         mode: min
         save_top_k: 10
@@ -28,7 +28,7 @@ lightning:
     logger:
         logger_type: 'WandbLogger'
         save_dir: '/scratch/mcinerney.de/gloria_outputs4/'
-        project: 'gloria_v4'
+        project: 'gloria_v6'
     evaluate_localization:
         eval_attn_overlay_mode: 'upsample'
         plot_attn_overlay_mode: 'upsample'
@@ -39,18 +39,17 @@ lightning:
 #        temp: 2.0
 
 model:
-    checkpoint: './pretrained/chexpert_resnet50.ckpt'
-#     checkpoint: './pretrained/retrained.ckpt'
-#     checkpoint: './pretrained/retrained_randsent.ckpt'
-#     checkpoint: './pretrained/retrained_onlyab.ckpt'
-#     checkpoint: './pretrained/retrained_kl.ckpt'
-#     checkpoint: './pretrained/retrained_pos.ckpt'
-#     checkpoint: './pretrained/retrained_pos_transformer.ckpt'
-
-#    checkpoint: '/scratch/mcinerney.de/gloria_outputs3/ckpt/gloria_pretrain_1.0/2021_12_03_10_15_30/last.ckpt' # retrained
-#    checkpoint: '/scratch/mcinerney.de/gloria_outputs3/ckpt/gloria_pretrain_1.0/2021_12_06_04_11_24/epoch=9-step=36509.ckpt' # retrained_noattnloss
-#    checkpoint: '/scratch/mcinerney.de/gloria_outputs3/ckpt/gloria_pretrain_1.0/2021_12_06_04_11_24/last.ckpt' # retrained_noattnloss
-#    checkpoint: '/scratch/mcinerney.de/gloria_outputs4/ckpt/gloria_pretrain_1.0//last.ckpt' # retrained_noattnloss_reweighted
+#    checkpoint: './pretrained/chexpert_resnet18.ckpt'
+    checkpoint: './pretrained/chexpert_resnet50.ckpt
+#    checkpoint: './pretrained/retrained_abnormal_best_epoch10.ckpt
+#    checkpoint: './pretrained/retrained_abnormal_last_epoch20.ckpt
+#    checkpoint: './pretrained/retrained_best_epoch6.ckpt
+#    checkpoint: './pretrained/retrained_kl_best_epoch11.ckpt
+#    checkpoint: './pretrained/retrained_kl_last_epoch19.ckpt
+#    checkpoint: './pretrained/retrained_last_epoch16.ckpt
+#    checkpoint: './pretrained/retrained_pos_last_epoch27.ckpt
+#    checkpoint: './pretrained/retrained_randsent_last_epoch10.ckpt
+#    checkpoint: './pretrained/retrained_transformer_last_epoch19.ckpt
     gloria:
         local_loss_weight: 1.0
         global_loss_weight: 1.0
@@ -60,7 +59,7 @@ model:
         no_attn_vec: false
 #         no_attn_loss_weight: 1.0
 #         attention_divergence_loss_weight: 1.0
-#        sparse_attn_weight: 1.0
+#         sparse_attn_weight: 1.0
     vision:
         model_name: 'resnet_50'
         freeze_cnn: false
@@ -73,10 +72,11 @@ model:
         embedding_dim: 768
         freeze_bert: false
         agg_tokens: true
-    num_image_position_embeddings: 19
-    image_transformer:
-        num_heads: 12
-        num_layers: 1
+#    image_position_embeddings:
+#        num: 19
+#    image_transformer:
+#        num_heads: 12
+#        num_layers: 1
 
 data:
     dataset: imagenome
@@ -97,9 +97,11 @@ data:
 #    randomize_objects_mode: 'shuffle_bboxes_sentences'
 #    randomize_objects_mode: 'random_bboxes'
 #    randomize_objects_mode: 'random_sentences'
-    swap_left_right: true
-    generate_sent: true
-    swap_conditions: true
+    swap_left_right: false
+    generate_sent: false
+    swap_conditions: false
+#     mask_mode: 'clinical'
+    mask_prob: .5
 
 transforms: 
     norm: 'half'
@@ -121,4 +123,4 @@ train:
         inerval: 'epoch'
         frequency: 1
 
-base_output_dir: '/scratch/mcinerney.de/gloria_outputs4/output'
+base_output_dir: '/scratch/mcinerney.de/gloria_outputs6/output'
