@@ -849,7 +849,7 @@ class ImaGenomeDataset(MimicCxr):
     def __init__(self, df, mimic_cxr_filer, imagenome_filer, group_by='sentence', gold=False, randomize_reports=False,
                  randomize_objects_mode=None, sentences_df=None, sentence_selector=None, swap_left_right=False,
                  swap_left_right_coords=False, generate_sent=False, swap_conditions=False, valid_locations_conditions=None,
-                 text_masker=None):
+                 text_masker=None, prob_of_masking=.5):
         self.group_by_sentence = group_by == 'sentence'
         if self.group_by_sentence:
             group_by = 'image'
@@ -885,6 +885,7 @@ class ImaGenomeDataset(MimicCxr):
         if self.swap_conditions:
             assert self.generate_sent and self.valid_locations_conditions is not None
         self.text_masker = text_masker
+        self.prob_of_masking = prob_of_masking
 
     def get_negative_parts_for_objects(self, objects, get_external_negatives=False, part_type='bbox', dicom_id=None):
         assert part_type in {'sentence', 'bbox'}
@@ -951,7 +952,8 @@ class ImaGenomeDataset(MimicCxr):
         return_dict = self.add_objects(
             return_dict, sent_id=sent_id, randomize_objects_mode=self.randomize_objects_mode,
             swap_left_right=self.swap_left_right, generate_sent=self.generate_sent,
-            swap_conditions=self.swap_conditions, text_masker=self.text_masker)
+            swap_conditions=self.swap_conditions, text_masker=self.text_masker,
+            prob_of_masking=self.prob_of_masking)
         if sent_id is not None:
             for subject_id, v1 in return_dict.items():
                 for study_id, v2 in v1.items():
@@ -980,7 +982,7 @@ class ImaGenomeDataset(MimicCxr):
         return new_labels, new_contexts, new_bboxes
 
     def add_objects(self, return_dict, sent_id=None, randomize_objects_mode=None, swap_left_right=False,
-                    generate_sent=False, swap_conditions=False, text_masker=None):
+                    generate_sent=False, swap_conditions=False, text_masker=None, prob_of_masking=.5):
         for subject_id, v1 in return_dict.items():
             for study_id, v2 in v1.items():
                 objects = {}
@@ -1004,6 +1006,7 @@ class ImaGenomeDataset(MimicCxr):
                         else:
                             sent = sent_label['sentence']
                             if swap_left_right:
+                                sent = sent.lower()
                                 sent = sent.replace(
                                     'right', 'right*****').replace(
                                     'left', 'right').replace(
@@ -1011,7 +1014,7 @@ class ImaGenomeDataset(MimicCxr):
                         v2['sentence'] = sent
                         # register sentence id
                         v2['sent_id'] = sent_id
-                    if text_masker is not None:
+                    if text_masker is not None and random.random() < prob_of_masking:
                         text_key = 'sentence' if sent_id is not None else 'report'
                         v2[text_key] = text_masker(v2[text_key])
                     objects[dicom_id] = image_objects
@@ -1073,6 +1076,7 @@ class ImaGenomeDataModule(BaseDataModule):
                  num_preprocessing_workers=os.cpu_count(), chunksize=1, split_slices='train,valid,test,gold', gold_test=False,
                  limit_to=None, randomize_reports=False, randomize_objects_mode=None, swap_left_right=False,
                  generate_sent=False, swap_conditions=False, mask_mode=None, mask_token='[MASK]', mask_prob=.5,
+                 prob_of_masking=.5,
                  group_by='sentence', **kwargs):
         super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn, **kwargs)
         self.mimic_cxr_filer = mimic_cxr_filer
@@ -1106,6 +1110,7 @@ class ImaGenomeDataModule(BaseDataModule):
         self.mask_mode = mask_mode
         self.mask_token = mask_token
         self.mask_prob = mask_prob
+        self.prob_of_masking = prob_of_masking
         self.group_by = group_by
 
     def get_kwargs(self, records):
@@ -1211,7 +1216,7 @@ class ImaGenomeDataModule(BaseDataModule):
 
     def get_dataset(self, split, **kwargs):
         for k in ['limit_to', 'randomize_reports', 'randomize_objects_mode', 'swap_left_right', 'generate_sent',
-                  'swap_conditions', 'mask_mode', 'group_by']:
+                  'swap_conditions', 'mask_mode', 'prob_of_masking', 'group_by']:
             if k not in kwargs.keys():
                 kwargs[k] = getattr(self, k)
         if kwargs['limit_to'] is None:

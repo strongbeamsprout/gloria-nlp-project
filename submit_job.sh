@@ -6,7 +6,7 @@
 #SBATCH --export=1
 #SBATCH --mem=40Gb
 #SBATCH --cpus-per-task=12
-#SBATCH --time=96:00:00
+#SBATCH --time=36:00:00
 #SBATCH --job-name=train_gloria
 module load anaconda3/3.7
 module load cuda/10.2

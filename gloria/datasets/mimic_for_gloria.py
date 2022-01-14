@@ -42,12 +42,16 @@ class GloriaCollateFn:
             captions.append(instance['sentence'] if 'sentence' in instance.keys() else instance['report'])
         return self.get_batch(images, captions, instances=instances if self.include_instances else None)
 
-    def get_batch(self, images, captions, instances=None):
+    def get_batch(self, images, captions, instances=None, sort=True):
         imgs = self.process_img(images, self.device)
         cap_return_dict = self.process_text(captions, self.device)
 
         # sort and add to dictionary
-        sorted_cap_lens, sorted_cap_indices = torch.sort(torch.tensor(cap_return_dict["cap_lens"]), 0, True)
+        if sort:
+            sorted_cap_lens, sorted_cap_indices = torch.sort(torch.tensor(cap_return_dict["cap_lens"]), 0, True)
+        else:
+            sorted_cap_lens = torch.tensor(cap_return_dict["cap_lens"])
+            sorted_cap_indices = torch.arange(len(sorted_cap_lens))
         sorted_cap_lens, sorted_cap_indices = sorted_cap_lens.to(self.device), sorted_cap_indices.to(self.device)
         return_dict = {k: v[sorted_cap_indices] for k, v in cap_return_dict.items() if k != "cap_lens"}
         return_dict["cap_lens"] = sorted_cap_lens

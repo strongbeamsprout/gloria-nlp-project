@@ -92,6 +92,7 @@ class ImaGenomeDataModule(pl.LightningDataModule):
             swap_left_right=self.cfg.data.swap_left_right,
             generate_sent=self.cfg.data.generate_sent, swap_conditions=self.cfg.data.swap_conditions,
             mask_mode=self.cfg.data.mask_mode, mask_prob=self.cfg.data.mask_prob,
+            prob_of_masking=self.cfg.data.prob_of_masking,
             mask_token=collate_fn[0].tokenizer.mask_token,
             group_by=self.cfg.data.group_by, drop_last=True, pin_memory=True)
         self.prepare_data()

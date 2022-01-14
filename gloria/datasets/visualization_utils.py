@@ -545,6 +545,7 @@ def plot_info(attn_overlay_func, info, path=None, add_no_attn_bar=False):
 
 import os
 from tqdm import tqdm
+import pandas as pd
 
 def path_and_rows_to_info(path, rows=None):
     if rows is None:

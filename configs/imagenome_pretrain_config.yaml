@@ -17,6 +17,9 @@ lightning:
 #         resume_from_checkpoint: /scratch/mcinerney.de/gloria_outputs5/ckpt/gloria_pretrain_1.0/2021_12_21_11_05_13/last.ckpt # position
 #         resume_from_checkpoint: /scratch/mcinerney.de/gloria_outputs5/ckpt/gloria_pretrain_1.0/2021_12_22_12_56_07/last.ckpt # position2
 #         resume_from_checkpoint: /scratch/mcinerney.de/gloria_outputs5/ckpt/gloria_pretrain_1.0/2021_12_24_10_44_13/last.ckpt # transformer
+#         resume_from_checkpoint: /scratch/mcinerney.de/gloria_outputs5/ckpt/gloria_pretrain_1.0/2021_12_31_22_02_48/last.ckpt # masked
+#         resume_from_checkpoint: /scratch/mcinerney.de/gloria_outputs5/ckpt/gloria_pretrain_1.0/2021_12_31_11_12_34/last.ckpt # kl
+#         resume_from_checkpoint: /scratch/mcinerney.de/gloria_outputs5/ckpt/gloria_pretrain_1.0/2022_01_07_00_37_57/last.ckpt # mixed_masked
     checkpoint_callback:
         monitor: 'val_loss'
         dirpath: '/scratch/mcinerney.de/gloria_outputs5/ckpt'
@@ -90,6 +93,7 @@ data:
 #     limit_to: 'abnormal'
     mask_mode: 'clinical'
     mask_prob: .5
+    prob_of_masking: .8
 
 transforms: 
     norm: 'half'

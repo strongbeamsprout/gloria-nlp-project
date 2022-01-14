@@ -354,7 +354,7 @@ class EvaluateLocalization(Callback):
             batch_size = len(info['original_image']) if self.batch_size is None else self.batch_size
             batches = [
                 self.gloria_collate_fn.get_batch(
-                    info['original_image'][i:i+batch_size], info['sentence'][i:i+batch_size])
+                    info['original_image'][i:i+batch_size], info['sentence'][i:i+batch_size], sort=False)
                 for i in range(0, len(info['original_image']), batch_size)
             ]
         else:
@@ -436,6 +436,7 @@ class EvaluateLocalization(Callback):
                 metrics += ['precision_at_%f' % p for p in self.metrics.percentile_thresholds]
                 metrics += ['recall_at_%f' % p for p in self.metrics.percentile_thresholds]
                 metrics += ['f1_at_%f' % p for p in self.metrics.percentile_thresholds]
+                metrics += ['iou_at_%f' % p for p in self.metrics.percentile_thresholds]
                 for metric in metrics:
                     if (~df[metric].isnull()).sum() > 0:
                         logger.log({"train/%s_step" % metric: df[metric][~df[metric].isnull()].mean()},
@@ -497,6 +498,7 @@ class EvaluateLocalization(Callback):
                 metrics += ['precision_at_%f' % p for p in self.metrics.percentile_thresholds]
                 metrics += ['recall_at_%f' % p for p in self.metrics.percentile_thresholds]
                 metrics += ['f1_at_%f' % p for p in self.metrics.percentile_thresholds]
+                metrics += ['iou_at_%f' % p for p in self.metrics.percentile_thresholds]
                 for metric in metrics:
                     if (~df[metric].isnull()).sum() > 0:
                         logger.log({"%s/%s_epoch" % (epoch_type, metric): df[metric][~df[metric].isnull()].mean()},
