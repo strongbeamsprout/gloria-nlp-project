@@ -8,6 +8,13 @@ import os
 import pandas as pd
 
 
+checkpoints = {
+    'gloria_pretrained': 'pretrained/chexpert_resnet50.ckpt',
+    'gloria_retrained': 'pretrained/retrained_last_epoch16.ckpt',
+    'clinical_masking': 'pretrained/retrained_masked_last_epoch25.ckpt'
+}
+
+
 @st.cache(allow_output_mutation=True)
 def load_model(ckpt):
     print("loading model")
@@ -47,23 +54,17 @@ def get_annotations(ann_file):
     return df
 
 
-checkpoints = {
-#    'gloria_pretrained': 'pretrained/retrained_masked_last_epoch25.ckpt',
-#    'gloria_retained': 'pretrained/retrained_masked_last_epoch25.ckpt',
-    'clinical_masking': 'pretrained/retrained_masked_last_epoch25.ckpt'
-}
-
-
 class OnSubmit:
-    def __init__(self, df, dicom_id, sent_id, new_row, file):
+    def __init__(self, df, dicom_id, sent_id, ckpt_name, new_row, file):
         self.df = df
         self.dicom_id = dicom_id
         self.sent_id = sent_id
+        self.ckpt_name = ckpt_name
         self.new_row = new_row
         self.file = file
 
     def __call__(self):
-        self.df = self.df[(self.df.dicom_id != self.dicom_id) | (self.df.sent_id != self.sent_id)]
+        self.df = self.df[(self.df.dicom_id != self.dicom_id) | (self.df.sent_id != self.sent_id) | (self.df.checkpoint_name != self.ckpt_name)]
         self.df = self.df.append(pd.DataFrame([self.new_row]))
         self.df.to_csv(self.file, index=False)
 
@@ -79,21 +80,24 @@ split = st.selectbox('Dataset Split', ['val', 'test'])
 dataset = getattr(datamodule, split)
 data_size = len(dataset)
 instance_number = st.slider('instance', 1, data_size, 1)
-instance = dataset[instance_number-1]
+instance = dataset[instance_number - 1]
 patient_id = next(iter(instance.keys()))
 study_id = next(iter(instance[patient_id].keys()))
 dicom_id = next(iter(instance[patient_id][study_id]['images'].keys()))
 #instance_batch = collate_fn([instance])
 #import pdb; pdb.set_trace()
-show_caption = st.checkbox('Show caption')
+#show_caption = st.checkbox('Show caption')
+show_caption = True
 original_image = instance[patient_id][study_id]['images'][dicom_id]
 image = collate_fn.process_img([original_tensor_to_numpy_image(original_image)], 'cpu')[0, 0]
-custom_prompt = st.checkbox('Custom Prompt')
+sentence = instance[patient_id][study_id]['sentence']
+st.write('Sentence %s: %s' % (instance[patient_id][study_id]['sent_id'], sentence))
 st.write('Prompt:')
+custom_prompt = st.checkbox('Custom Prompt')
 if custom_prompt:
     prompt = st.text_input('Enter text prompt here.')
 else:
-    prompt = instance[patient_id][study_id]['sentence']
+    prompt = sentence
     st.write(prompt)
 @st.cache(allow_output_mutation=True)
 def get_attention(image_id, prmpt):
@@ -126,8 +130,7 @@ if annotations_name != "":
     if os.path.exists(file):
         df = get_annotations(file)
     else:
-        df = pd.DataFrame([], columns=['dicom_id', 'sent_id', 'prompt', 'rating', 'is_custom_prompt'])
-    st.write(df)
+        df = pd.DataFrame([], columns=['dicom_id', 'sent_id', 'checkpoint_name', 'prompt', 'rating', 'is_custom_prompt'])
     if not custom_prompt:
         sent_id = instance[patient_id][study_id]['sent_id']
     else:
@@ -139,12 +142,12 @@ if annotations_name != "":
             current_custom_id_ints = [int(custom_id[6:]) for custom_id in current_custom_prompt_rows.sent_id]
             index = max(current_custom_id_ints) if len(current_custom_id_ints) > 0 else -1
             sent_id = 'custom' + str(index + 1)
-    relevant_rows = df[(df.dicom_id == dicom_id) & (df.sent_id == sent_id)]
+    relevant_rows = df[(df.dicom_id == dicom_id) & (df.sent_id == sent_id) & (df.checkpoint_name == checkpoint_name)]
     if len(relevant_rows) > 0:
         st.write('Current rating: %i' % int(relevant_rows.iloc[0].rating))
-    rating = st.slider('Rating of the usefulness of the attention', 1, 5, 3, key='rating %s %s' % (dicom_id, sent_id))
-    new_row = {'dicom_id': dicom_id, 'sent_id': sent_id, 'prompt': prompt, 'rating': rating, 'is_custom_prompt': custom_prompt, 'checkpoint_name': checkpoint_name}
-    onsubmit = OnSubmit(df, dicom_id, sent_id, new_row, file)
+    rating = st.slider('Rating of the usefulness of the attention', 1, 5, 3, key='rating %s %s %s' % (dicom_id, sent_id, checkpoint_name))
+    new_row = {'dicom_id': dicom_id, 'sent_id': sent_id, 'checkpoint_name': checkpoint_name, 'prompt': prompt, 'rating': rating, 'is_custom_prompt': custom_prompt}
+    onsubmit = OnSubmit(df, dicom_id, sent_id, checkpoint_name, new_row, file)
     st.button('submit', on_click=onsubmit)
     show_anns = st.checkbox('Show annotations')
     if show_anns:
