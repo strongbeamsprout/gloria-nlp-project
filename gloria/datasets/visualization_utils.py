@@ -486,12 +486,12 @@ def plot_info(attn_overlay_func, info, path=None, add_no_attn_bar=False):
         if not os.path.exists(os.path.join(path, 'attention_with_bboxes')):
             os.mkdir(os.path.join(path, 'attention_with_bboxes'))
     figs = []
-    for dicom_sent_id, sent, sent_labels, sent_contexts, bbox_names, \
-        image, bboxes, attn, auroc, avg_precision, roc_curve, pr_curve in tqdm(zip(
+    for i, (dicom_sent_id, sent, sent_labels, sent_contexts, bbox_names,
+        image, bboxes, attn, auroc, avg_precision, roc_curve, pr_curve) in tqdm(enumerate(zip(
         *(info[k] for k in [
             'dicom_sent_id', 'sentence', 'sent_labels', 'sent_contexts', 'bbox_names',
             'image', 'bboxes', 'attn', 'auroc', 'avg_precision', 'roc_curve', 'pr_curve'])
-    ), total=len(info['dicom_sent_id'])):
+    )), total=len(info['dicom_sent_id'])):
         image = torch.tensor(image)
         fig = plt.figure(figsize=(15, 5), tight_layout=True)
         a1 = plt.subplot2grid((2, 5), (1, 0), rowspan = 1, colspan = 1)
@@ -506,7 +506,8 @@ def plot_info(attn_overlay_func, info, path=None, add_no_attn_bar=False):
         image_with_bboxes = draw_bounding_boxes(to_rgb(image), bboxes)
         Image.fromarray(image_with_bboxes).save(os.path.join(path, 'image_with_bboxes', dicom_sent_id + '.jpg'))
         a2.imshow(image_with_bboxes)
-        new_attn = attn_overlay_func(attn, image.shape[:2])
+        new_attn = attn_overlay_func(attn, image.shape[:2], info['attn_bboxes'][i]
+                                     if 'attn_bboxes' in info.keys() else None)
         if add_no_attn_bar:
             zeros_bar = torch.zeros((max(int(new_attn.shape[0] * .01), 1), new_attn.shape[1]))
             no_attn_bar = torch.ones((max(int(new_attn.shape[0] * .05), 1), new_attn.shape[1])) * (1 - attn.sum())
@@ -565,7 +566,8 @@ def path_and_rows_to_info(path, rows=None):
 from torch import nn
 import skimage
 
-def pyramid_attn_overlay(attn, image_shape):
+
+def pyramid_attn_overlay(attn, image_shape, attn_bboxes=None):
     new_attn = torch.tensor(attn)
     new_attn = new_attn.unsqueeze(-1).expand(*new_attn.shape, 3)
     new_attn = skimage.transform.pyramid_expand(

@@ -48,7 +48,7 @@ def get_parser():
     parser.add_argument(
         "--ckpt_path", type=str, default=None, help="Checkpoint path for the save model"
     )
-    parser.add_argument("--random_seed", type=int, default=23, help="Random seed")
+    parser.add_argument("--random_seed", type=int, default=None, help="Random seed")
     parser.add_argument(
         "--train_pct", type=float, default=1.0, help="Percent of training data"
     )
@@ -57,6 +57,15 @@ def get_parser():
         type=int,
         default=1,
         help="Train on n number of splits used for training. Defaults to 1",
+    )
+    parser.add_argument(
+        "--mask_mode",
+        default=None
+    )
+    parser.add_argument(
+        "--mask_prob",
+        type=float,
+        default=None
     )
     parser = Trainer.add_argparse_args(parser)
 
@@ -145,11 +154,16 @@ def main(cfg, args):
 
 
 if __name__ == "__main__":
-
     # parse arguments
     parser = get_parser()
     args = parser.parse_args()
     cfg = OmegaConf.load(args.config)
+    if args.random_seed is not None:
+        cfg.random_seed = args.random_seed
+    if args.mask_mode is not None:
+        cfg.data.mask_mode = args.mask_mode
+    if args.mask_prob is not None:
+        cfg.data.mask_prob = args.mask_prob
 
     # edit experiment name
     cfg.data.frac = args.train_pct
@@ -166,7 +180,7 @@ if __name__ == "__main__":
         timestamp = now.strftime("%Y_%m_%d_%H_%M_%S")
 
         # random seed
-        args.random_seed = split + 1
+        args.random_seed = split + cfg.random_seed
         seed_everything(args.random_seed)
 
         # set directory names

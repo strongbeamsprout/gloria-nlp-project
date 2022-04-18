@@ -1,5 +1,6 @@
 experiment_name: 'gloria_pretrain'
 phase: 'pretrain'
+random_seed: 0
 
 lightning:
     trainer:
@@ -22,7 +23,7 @@ lightning:
 #         resume_from_checkpoint: /scratch/mcinerney.de/gloria_outputs5/ckpt/gloria_pretrain_1.0/2022_01_07_00_37_57/last.ckpt # mixed_masked
     checkpoint_callback:
         monitor: 'val_loss'
-        dirpath: '/scratch/mcinerney.de/gloria_outputs5/ckpt'
+        dirpath: '/scratch/mcinerney.de/gloria_outputs7/ckpt'
         save_last: true 
         mode: min
         save_top_k: 10
@@ -34,8 +35,8 @@ lightning:
         mode: 'min'
     logger:
         logger_type: 'WandbLogger'
-        save_dir: '/scratch/mcinerney.de/gloria_outputs5/'
-        project: 'gloria_v5'
+        save_dir: '/scratch/mcinerney.de/gloria_outputs7/'
+        project: 'gloria_v7'
     evaluate_localization:
         eval_attn_overlay_mode: 'upsample'
         plot_attn_overlay_mode: 'upsample'
@@ -91,9 +92,9 @@ data:
     group_by: 'sentence'
 #     randomize_objects_mode: 'random_sentences'
 #     limit_to: 'abnormal'
-    mask_mode: 'clinical'
-    mask_prob: .5
-    prob_of_masking: .8
+    mask_mode: 'word'
+    mask_prob: .3
+    prob_of_masking: 1
 
 transforms: 
     norm: 'half'
@@ -115,4 +116,4 @@ train:
         inerval: 'epoch'
         frequency: 1
 
-base_output_dir: '/scratch/mcinerney.de/gloria_outputs5/output'
+base_output_dir: '/scratch/mcinerney.de/gloria_outputs7/output'

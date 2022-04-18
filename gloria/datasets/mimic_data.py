@@ -1014,7 +1014,7 @@ class ImaGenomeDataset(MimicCxr):
                         v2['sentence'] = sent
                         # register sentence id
                         v2['sent_id'] = sent_id
-                    if text_masker is not None and random.random() < prob_of_masking:
+                    if text_masker is not None and (prob_of_masking == 1 or random.random() < prob_of_masking):
                         text_key = 'sentence' if sent_id is not None else 'report'
                         v2[text_key] = text_masker(v2[text_key])
                     objects[dicom_id] = image_objects
@@ -1164,8 +1164,8 @@ class ImaGenomeDataModule(BaseDataModule):
         dicom_ids = set()
         gold_objects_df = self.imagenome_filer.get_gold_file('gold_object_attribute_with_coordinates.txt')
         for k, v in self.split_slices.items():
-            if k in {'train', 'valid', 'test'}:
-                self.imagenome_filer.unzip_file('silver_dataset/scene_graph.zip')
+#            if k in {'train', 'valid', 'test'}:
+#                self.imagenome_filer.unzip_file('silver_dataset/scene_graph.zip')
             split_df = self.imagenome_filer.get_split(k)
             if k == 'gold':
                 gold_object_attribute_with_coordinates_df = \
@@ -1228,6 +1228,8 @@ class ImaGenomeDataModule(BaseDataModule):
         del kwargs['limit_to']
         if kwargs['mask_mode'] is None:
             kwargs['text_masker'] = None
+        elif kwargs['mask_mode'] == 'word':
+            kwargs['text_masker'] = WordMasker(self.mask_token, mask_prob=self.mask_prob)
         elif kwargs['mask_mode'] == 'clinical':
             kwargs['text_masker'] = ClinicalEntityMasker(self.mask_token, mask_prob=self.mask_prob)
         else:
