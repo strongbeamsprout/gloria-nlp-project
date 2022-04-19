@@ -154,7 +154,7 @@ with col1:
             new_row = {'dicom_sent_id': 'dicom_%s_sent_%s' % (dicom_id, sent_id), 'dicom_id': dicom_id, 'sent_id': sent_id,
                        'checkpoint_name': checkpoint_name, 'prompt': prompt, 'rating': rating, 'is_custom_prompt': custom_prompt}
             onsubmit = OnSubmit(df, dicom_id, sent_id, checkpoint_name, new_row, file)
-            st.button('submit', on_click=onsubmit)
+            st.button('submit', on_click=onsubmit, disabled=prompt == "")
     if annotations_name != "":
         with st.expander('All Annotations', expanded=False):
             st.write(df)
