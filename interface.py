@@ -8,7 +8,21 @@ import os
 import pandas as pd
 
 
+def process_bboxes(image_shapes, bboxes, collatefn):
+    new_bboxes = []
+    box_masks = []
+    for shape, bbox in zip(image_shapes, bboxes):
+        box_mask = bbox_to_mask(bbox, shape)
+        box_masks.append(original_tensor_to_numpy_image(box_mask))
+    new_box_masks = collatefn.process_img(box_masks, 'cpu')
+    new_box_masks = new_box_masks > 0
+    new_bboxes = [mask_to_bbox(new_box_mask[0]) for new_box_mask in new_box_masks]
+    return new_bboxes
+
+
 checkpoints = {
+#    'no_attn': '/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_04_29_10_46_53/epoch=0-step=3650.ckpt',
+    'no_attn_low_entropy': '/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_04_27_13_33_00/last.ckpt',
     'gloria_pretrained': 'pretrained/chexpert_resnet50.ckpt',
     'gloria_retrained': 'pretrained/retrained_last_epoch16.ckpt',
     'clinical_masking': 'pretrained/retrained_masked_last_epoch25.ckpt'
@@ -87,6 +101,7 @@ with st.sidebar:
     checkpoint_name = st.selectbox('Model', checkpoints.keys())
     checkpoint = checkpoints[checkpoint_name]
     model = load_model(checkpoint)
+    has_no_attn = model.hparams.model.gloria.no_attn_vec
     config = get_config('configs/imagenome_pretrain_val_config.yaml')
     datamodule = load_data(config)
     collate_fn = get_collate_fn(config)
@@ -160,23 +175,35 @@ with col1:
             st.write(df)
 with col2:
     original_image = instance[patient_id][study_id]['images'][dicom_id]
-    image = collate_fn.process_img([original_tensor_to_numpy_image(original_image)], 'cpu')[0, 0]
+    original_image = original_tensor_to_numpy_image(original_image)
+    image = collate_fn.process_img([original_image], 'cpu')[0, 0]
     @st.cache(allow_output_mutation=True)
     def get_attention(image_id, prmpt, ckpt_name):
         if len(prmpt) == 0:
-            return torch.zeros_like(image)
+            return torch.zeros_like(image), 0
         batch = collate_fn.get_batch(
-            [original_tensor_to_numpy_image(original_image)],
+            [original_image],
             [prmpt],
         )
         img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents = model.gloria(batch)
         ams = model.gloria.get_attn_maps(img_emb_l, text_emb_l, sents)
         am = ams[0][0].mean(0).detach().cpu().numpy()
+        no_attn = 1 - am.sum()
         attn_img = pyramid_attn_overlay(am, (224, 224))
-        return attn_img
-    attn_img = get_attention(dicom_id, prompt, checkpoint_name)
+        return attn_img, no_attn
+    attn_img, no_attn_score = get_attention(dicom_id, prompt, checkpoint_name)
+    if has_no_attn:
+        attn_img[-10:, -10:] = no_attn_score
     attn_strength = st.slider('Display attention coefficient', 0, 10000, value=5000, step=100)
+    numpy_image = original_tensor_to_numpy_image(image + attn_strength * attn_img)
+    if not custom_prompt:
+        def get_bboxes(image_id, sent_id):
+            original_bboxes = sent_info[sent_id]['coords_original']
+            new_bboxes = process_bboxes([original_image.shape] * len(original_bboxes), original_bboxes, collate_fn)
+            return new_bboxes
+        bboxes = get_bboxes(dicom_id, sent_id)
+        numpy_image = draw_bounding_boxes(to_rgb(torch.tensor(numpy_image)), bboxes)
     st.image(
-        original_tensor_to_numpy_image(image + attn_strength * attn_img),
+        numpy_image,
         use_column_width='always')
 print("done")

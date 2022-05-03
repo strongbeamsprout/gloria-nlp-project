@@ -67,7 +67,7 @@ class GLoRIA(nn.Module):
         self.sparse_attn_loss_weight = self.cfg.model.gloria.sparse_attn_loss_weight
         self.no_attn_loss_weight = self.cfg.model.gloria.no_attn_loss_weight
         self.attention_divergence_loss_weight = self.cfg.model.gloria.attention_divergence_loss_weight
-#         self.attention_loss_weight = self.cfg.model.gloria.attention_loss_weight
+        self.attention_entropy_loss_weight = self.cfg.model.gloria.attention_entropy_loss_weight
 
         self.temp1 = self.cfg.model.gloria.temp1
         self.temp2 = self.cfg.model.gloria.temp2
@@ -106,7 +106,7 @@ class GLoRIA(nn.Module):
         cap_lens = [
             len([w for w in sent if not w.startswith("[")]) + 1 for sent in sents
         ]
-        l_loss0, l_loss1, attn_maps = self.local_loss(
+        l_loss0, l_loss1, no_attn_loss, kl_loss, entropy_loss, attn_maps = self.local_loss(
             img_emb_l,
             text_emb_l,
             cap_lens,
@@ -115,10 +115,11 @@ class GLoRIA(nn.Module):
             temp3=self.temp3,
             no_attn_vec=self.no_attn_vec,
             no_attn_loss_weight=self.no_attn_loss_weight,
-            attention_divergence_loss_weight=self.attention_divergence_loss_weight
+            attention_divergence_loss_weight=self.attention_divergence_loss_weight,
+            attention_entropy_loss_weight=self.attention_entropy_loss_weight
         )
 
-        return l_loss0, l_loss1, attn_maps
+        return l_loss0, l_loss1, no_attn_loss, kl_loss, entropy_loss, attn_maps
 
     def _calc_global_loss(self, img_emb_g, text_emb_g):
         g_loss0, g_loss1 = self.global_loss(img_emb_g, text_emb_g, temp3=self.temp3)
@@ -129,25 +130,27 @@ class GLoRIA(nn.Module):
 
     def calc_loss(self, img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents, attn_labels=None):
 
-        l_loss0, l_loss1, attn_maps = self._calc_local_loss(
+        l_loss0, l_loss1, no_attn_loss, kl_loss, entropy_loss, attn_maps = self._calc_local_loss(
             img_emb_l, text_emb_l, sents,
         )
-        g_loss0, g_loss1 = self._calc_global_loss(img_emb_g, text_emb_g)
 
         # weighted loss
         loss = 0
         loss += (l_loss0 + l_loss1) * self.local_loss_weight
-        loss += (g_loss0 + g_loss1) * self.global_loss_weight
-        
-        if self.sparse_attn_loss_weight is not None:
-            avg_attn_entropy = []
-            for am in attn_maps:
-                am_mean = am[0].mean(0).reshape(-1)
-                # note if no-attn is not turned on, this makes no difference because 1 - am_mean.sum() = 0
-                am_mean = torch.cat([1 - am_mean.sum(), am_mean], 0)
-                avg_attn_entropy.append(Categorical(am_mean).entropy())
-            sparsity_regularization = sum(avg_attn_entropy) / len(avg_attn_entropy)
-            loss += sparsity_regularization * self.sparse_attn_loss_weight
+        if self.global_loss_weight != 0:
+            g_loss0, g_loss1 = self._calc_global_loss(img_emb_g, text_emb_g)
+            loss += (g_loss0 + g_loss1) * self.global_loss_weight
+        loss += no_attn_loss + kl_loss + entropy_loss
+
+#        if self.sparse_attn_loss_weight is not None:
+#            avg_attn_entropy = []
+#            for am in attn_maps:
+#                am_mean = am[0].mean(0).reshape(-1)
+#                # note if no-attn is not turned on, this makes no difference because 1 - am_mean.sum() = 0
+#                am_mean = torch.cat([1 - am_mean.sum(), am_mean], 0)
+#                avg_attn_entropy.append(Categorical(am_mean).entropy())
+#            sparsity_regularization = sum(avg_attn_entropy) / len(avg_attn_entropy)
+#            loss += sparsity_regularization * self.sparse_attn_loss_weight
 #         if self.attn_loss_weight is not None:
 #             assert attn_label is not None
 #             loss += self._calc_attn_loss(attn_maps, attn_labels) * self.attn_loss_weight
@@ -212,7 +215,7 @@ class GLoRIA(nn.Module):
         return local_similarities
 
     def get_attn_maps(self, img_emb_l, text_emb_l, sents):
-        _, _, attn_maps = self._calc_local_loss(img_emb_l, text_emb_l, sents)
+        _, _, _, _, _, attn_maps = self._calc_local_loss(img_emb_l, text_emb_l, sents)
         return attn_maps
 
     def plot_attn_maps(self, attn_maps, imgs, sents, epoch_idx=0, batch_idx=0):

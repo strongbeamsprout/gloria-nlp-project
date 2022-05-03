@@ -54,8 +54,8 @@ model:
         temp3: 10.0
         no_attn_vec: false
 #         no_attn_loss_weight: 1.0
-#         attention_divergence_loss_weight: .1
-#         sparse_attn_weight: 1.0
+#         attention_divergence_loss_weight: 1.0
+#         attention_entropy_loss_weight: 1.0
     vision:
         model_name: 'resnet_50'
         freeze_cnn: false

@@ -92,9 +92,13 @@ def kl_divergence(attn1, attn2):
     return (attn1 * torch.log(attn1 / attn2)).sum(-1)
 
 
+def entropy(attn):
+    return -(attn * torch.log(attn)).sum(-1)
+
+
 def local_loss(
     img_features, words_emb, cap_lens, temp1=4.0, temp2=5.0, temp3=10.0, agg="sum", no_attn_vec=None,
-    no_attn_loss_weight=None, attention_divergence_loss_weight=None
+    no_attn_loss_weight=None, attention_divergence_loss_weight=None, attention_entropy_loss_weight=None
 ):
 
     batch_size = img_features.shape[0]
@@ -104,7 +108,10 @@ def local_loss(
     if no_attn_loss_weight is not None:
         no_attn_scores = []
     if attention_divergence_loss_weight is not None:
+        flattened_attns = []
         kl_divergences = []
+    if attention_entropy_loss_weight is not None:
+        entropies = []
     # cap_lens = cap_lens.data.tolist()
     for i in range(words_emb.shape[0]):
 
@@ -121,17 +128,15 @@ def local_loss(
         )  # [48, 768, 25], [48, 25, 19, 19]
         if no_attn_loss_weight is not None:
             no_attn_scores.append(torch.log(1 - attn.sum(-1).sum(-1).mean(-1).unsqueeze(-1)))
-        if attention_divergence_loss_weight is not None:
+        if attention_divergence_loss_weight is not None or attention_entropy_loss_weight is not None:
             flattened_attn = attn.reshape(*attn.shape[:2], -1).mean(1)
             if no_attn_vec is not None:
                 flattened_attn = torch.cat(
                     [1 - flattened_attn.sum(-1, keepdims=True), flattened_attn], -1)
-            current_attn = flattened_attn[i].expand(batch_size, *flattened_attn[i].shape)
-            symmetric_kl = (
-                kl_divergence(current_attn, flattened_attn) +
-                kl_divergence(flattened_attn, current_attn)
-            ) / 2
-            kl_divergences.append(symmetric_kl.unsqueeze(1))
+            if attention_entropy_loss_weight is not None:
+                entropies.append(entropy(flattened_attn).unsqueeze(1))
+            if attention_divergence_loss_weight is not None:
+                flattened_attns.append(flattened_attn.unsqueeze(1))
 
         att_maps.append(
             attn[i].unsqueeze(0).contiguous()
@@ -155,12 +160,7 @@ def local_loss(
         similarities.append(row_sim)
 
     similarities = torch.cat(similarities, 1)  #
-    if no_attn_loss_weight is not None:
-        no_attn_scores = torch.cat(no_attn_scores, 1)  #
-        similarities = similarities - no_attn_loss_weight * no_attn_scores
-    if attention_divergence_loss_weight is not None:
-        kl_divergences = torch.cat(kl_divergences, 1)
-        similarities = similarities - attention_divergence_loss_weight * kl_divergences
+
     similarities = similarities * temp3
     similarities1 = similarities.transpose(0, 1)  # [48, 48]
 
@@ -168,4 +168,34 @@ def local_loss(
 
     loss0 = nn.CrossEntropyLoss()(similarities, labels)  # labels: arange(batch_size)
     loss1 = nn.CrossEntropyLoss()(similarities1, labels)
-    return loss0, loss1, att_maps
+
+    mask = torch.eye(batch_size) == 1
+    if no_attn_loss_weight is not None:
+        no_attn_scores = torch.cat(no_attn_scores, 1)  #
+        no_attn_loss = no_attn_scores[mask].mean()
+        #no_attn_loss -= no_attn_scores[~mask].mean()
+        no_attn_loss = no_attn_loss_weight * no_attn_loss
+    else:
+        no_attn_loss = 0
+    if attention_divergence_loss_weight is not None:
+        flattened_attns = torch.cat(flattened_attns, 1)
+        for i in range(batch_size):
+            flattened_attn = flattened_attns[i]
+            current_attn = flattened_attn[i].expand(batch_size, *flattened_attn[i].shape)
+            symmetric_kl = (
+               kl_divergence(current_attn, flattened_attn) +
+               kl_divergence(flattened_attn, current_attn)
+            ) / 2
+            kl_divergences.append(symmetric_kl.unsqueeze(1))
+        kl_divergences = torch.cat(kl_divergences, 1)
+        kl_loss = -kl_divergences[~mask].mean()
+        kl_loss = attention_divergence_loss_weight * kl_loss
+    else:
+        kl_loss = 0
+    if attention_entropy_loss_weight is not None:
+        entropies = torch.cat(entropies, 1)
+        entropy_loss = entropies.mean()
+    else:
+        entropy_loss = 0
+
+    return loss0, loss1, no_attn_loss, kl_loss, entropy_loss, att_maps

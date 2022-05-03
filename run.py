@@ -67,6 +67,29 @@ def get_parser():
         type=float,
         default=None
     )
+    parser.add_argument(
+        "--no_attn_vec", action="store_true", default=False, help="specify to validate model"
+    )
+    parser.add_argument(
+        "--no_attn_loss_weight",
+        type=float,
+        default=None
+    )
+    parser.add_argument(
+        "--attention_divergence_loss_weight",
+        type=float,
+        default=None
+    )
+    parser.add_argument(
+        "--attention_entropy_loss_weight",
+        type=float,
+        default=None
+    )
+    parser.add_argument(
+        "--global_loss_weight",
+        type=float,
+        default=None
+    )
     parser = Trainer.add_argparse_args(parser)
 
     return parser
@@ -164,6 +187,19 @@ if __name__ == "__main__":
         cfg.data.mask_mode = args.mask_mode
     if args.mask_prob is not None:
         cfg.data.mask_prob = args.mask_prob
+    if args.ckpt_path is not None:
+        cfg.lightning.trainer.resume_from_checkpoint = args.ckpt_path
+    cfg.model.gloria.no_attn_vec = args.no_attn_vec
+    if args.no_attn_loss_weight is not None:
+        cfg.model.gloria.no_attn_loss_weight = args.no_attn_loss_weight
+    if args.attention_divergence_loss_weight is not None:
+        cfg.model.gloria.attention_divergence_loss_weight = args.attention_divergence_loss_weight
+    if args.attention_entropy_loss_weight is not None:
+        cfg.model.gloria.attention_entropy_loss_weight = args.attention_entropy_loss_weight
+    if args.global_loss_weight is not None:
+        cfg.model.gloria.global_loss_weight = args.global_loss_weight
+    if args.gradient_clip_val != 0:
+        cfg.lightning.trainer.gradient_clip_val = args.gradient_clip_val
 
     # edit experiment name
     cfg.data.frac = args.train_pct
