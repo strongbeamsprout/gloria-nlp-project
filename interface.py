@@ -22,10 +22,10 @@ def process_bboxes(image_shapes, bboxes, collatefn):
 
 checkpoints = {
 #    'no_attn': '/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_04_29_10_46_53/epoch=0-step=3650.ckpt',
-    'no_attn_low_entropy': '/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_04_27_13_33_00/last.ckpt',
+#    'no_attn_low_entropy': '/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_04_27_13_33_00/last.ckpt',
     'gloria_pretrained': 'pretrained/chexpert_resnet50.ckpt',
     'gloria_retrained': 'pretrained/retrained_last_epoch16.ckpt',
-    'clinical_masking': 'pretrained/retrained_masked_last_epoch25.ckpt'
+#    'clinical_masking': 'pretrained/retrained_masked_last_epoch25.ckpt'
 }
 
 
@@ -95,10 +95,19 @@ class OnSubmit:
         self.df.to_csv(self.file, index=False)
 
 
+anonymize_models = True
 st.set_page_config(layout="wide")
 with st.sidebar:
     st.title('Exploring & Annotating GLoRIA Attention')
-    checkpoint_name = st.selectbox('Model', checkpoints.keys())
+    model_names = sorted(list(checkpoints.keys()))
+    if anonymize_models:
+        aliases = ['model_%i' % i for i in range(len(checkpoints))]
+        random.shuffle(aliases)
+    else:
+        aliases = model_names
+    alias_to_model = {alias: model for alias, model in zip(aliases, model_names)}
+    alias = st.selectbox('Model', sorted(list(aliases)))
+    checkpoint_name = alias_to_model[alias]
     checkpoint = checkpoints[checkpoint_name]
     model = load_model(checkpoint)
     has_no_attn = model.hparams.model.gloria.no_attn_vec
@@ -148,6 +157,7 @@ with col1:
         else:
             prompt = sentence
             st.write(prompt)
+        show_bboxes = st.checkbox('Show Bounding Boxes')
     with st.expander('Annotate', expanded=True):
         if annotations_name != "":
             st.write('Annotations: ' + annotations_name)
@@ -162,17 +172,31 @@ with col1:
                     sent_id = 'custom' + str(index + 1)
             relevant_rows = df[(df.dicom_id == dicom_id) & (df.sent_id == sent_id) & (df.checkpoint_name == checkpoint_name)]
             if len(relevant_rows) > 0:
-                st.write('Current rating: %i' % int(relevant_rows.iloc[0].rating))
+                st.write('Current annotation:')
+                st.write('Is correct: %s' % relevant_rows.iloc[0].is_correct)
+                st.write('Is useful: %s' % relevant_rows.iloc[0].is_useful)
+                st.write('Is precise: %s' % relevant_rows.iloc[0].is_precise)
                 ondelete = OnDelete(df, dicom_id, sent_id, checkpoint_name, file)
                 st.button('delete', on_click=ondelete)
-            rating = st.slider('Rating of the usefulness of the attention', 1, 5, 3, key='rating %s %s %s' % (dicom_id, sent_id, checkpoint_name))
+            is_correct = st.select_slider('Does this heatmap correctly identify the region(s) of interest reffered to in the text?',
+                options=['no', 'partially', 'yes'],
+                key='correct %s %s %s' % (dicom_id, sent_id, checkpoint_name))
+            is_useful = st.select_slider('Is this heatmap useful?',
+                options=['no', 'partially', 'yes'],
+                key='useful %s %s %s' % (dicom_id, sent_id, checkpoint_name))
+            is_precise = st.select_slider('Is this heatmap precise? Rephrased, does this heatmap focus on a small region?',
+                options=['no', 'partially', 'yes'],
+                key='precise %s %s %s' % (dicom_id, sent_id, checkpoint_name))
             new_row = {'dicom_sent_id': 'dicom_%s_sent_%s' % (dicom_id, sent_id), 'dicom_id': dicom_id, 'sent_id': sent_id,
-                       'checkpoint_name': checkpoint_name, 'prompt': prompt, 'rating': rating, 'is_custom_prompt': custom_prompt}
+                       'checkpoint_name': checkpoint_name, 'prompt': prompt, 'is_correct': is_correct, 'is_useful': is_useful,
+                       'is_precise': is_precise, 'is_custom_prompt': custom_prompt}
             onsubmit = OnSubmit(df, dicom_id, sent_id, checkpoint_name, new_row, file)
             st.button('submit', on_click=onsubmit, disabled=prompt == "")
     if annotations_name != "":
         with st.expander('All Annotations', expanded=False):
-            st.write(df)
+            df_without_checkpoint = df.copy()
+            del df_without_checkpoint['checkpoint_name']
+            st.write(df_without_checkpoint)
 with col2:
     original_image = instance[patient_id][study_id]['images'][dicom_id]
     original_image = original_tensor_to_numpy_image(original_image)
@@ -196,7 +220,7 @@ with col2:
         attn_img[-10:, -10:] = no_attn_score
     attn_strength = st.slider('Display attention coefficient', 0, 10000, value=5000, step=100)
     numpy_image = original_tensor_to_numpy_image(image + attn_strength * attn_img)
-    if not custom_prompt:
+    if not custom_prompt and show_bboxes:
         def get_bboxes(image_id, sent_id):
             original_bboxes = sent_info[sent_id]['coords_original']
             new_bboxes = process_bboxes([original_image.shape] * len(original_bboxes), original_bboxes, collate_fn)

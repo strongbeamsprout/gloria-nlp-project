@@ -12,7 +12,8 @@ module load anaconda3/3.7
 module load cuda/10.2
 module load discovery/2019-02-21
 source activate gloria
-python run.py -c configs/imagenome_pretrain_config.yaml --train --no_attn_vec --attention_entropy_loss_weight 1.0 --attention_divergence_loss_weight 1.0 --mask_mode word --mask_prob .3 --random_seed=0
+python run.py -c configs/imagenome_pretrain_config.yaml --train --no_attn_vec --attention_entropy_loss_weight 1.0 --random_seed=0 \
+    --ckpt_path=/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_04_30_22_12_51/last.ckpt
 
 
 #python test_data.py
