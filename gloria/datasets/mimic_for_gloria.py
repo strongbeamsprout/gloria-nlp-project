@@ -7,6 +7,30 @@ import numpy as np
 import re
 from nltk.tokenize import RegexpTokenizer
 import random
+#from gloria.datasets.visualization_utils import sent_bboxes_to_segmentation_label, mask_to_bbox
+
+
+def bbox_to_mask(bbox, image_shape):
+    box_mask = torch.zeros(image_shape, dtype=torch.bool)
+    box_mask[bbox[1]:bbox[3] + 1, bbox[0]:bbox[2] + 1] = 1
+    return box_mask
+
+
+def mask_to_bbox(box_mask):
+    if box_mask.sum() == 0:
+        return [-1, -1, -1, -1]
+    indices0 = torch.arange(box_mask.shape[0])
+    indices1 = torch.arange(box_mask.shape[1])
+    indices0 = indices0.unsqueeze(1).expand(*box_mask.shape)[box_mask]
+    indices1 = indices1.unsqueeze(0).expand(*box_mask.shape)[box_mask]
+    return [indices1.min().item(), indices0.min().item(), indices1.max().item(), indices0.max().item()]
+
+
+def sent_bboxes_to_segmentation_label(shape, sent_bboxes):
+    segmentation_label = torch.zeros(shape, dtype=torch.bool)
+    for bbox in sent_bboxes:
+        segmentation_label = segmentation_label | bbox_to_mask(bbox, shape)
+    return segmentation_label
 
 
 def normalize(image):
@@ -16,6 +40,18 @@ def normalize(image):
 
 def original_tensor_to_numpy_image(image):
     return np.array(normalize(image) * 255, dtype=np.uint8)
+
+
+def process_bboxes(image_shapes, bboxes, gloria_collate_fn):
+    new_bboxes = []
+    box_masks = []
+    for shape, bbox in zip(image_shapes, bboxes):
+        box_mask = bbox_to_mask(bbox, shape)
+        box_masks.append(original_tensor_to_numpy_image(box_mask))
+    new_box_masks = gloria_collate_fn.process_img(box_masks, 'cpu')
+    new_box_masks = new_box_masks > 0
+    new_bboxes = [mask_to_bbox(new_box_mask[0]) for new_box_mask in new_box_masks]
+    return new_bboxes
 
 
 class GloriaCollateFn:
@@ -31,7 +67,7 @@ class GloriaCollateFn:
     def __call__(self, instances):
         imgs, cap_len, ids, tokens, attention, path = [], [], [], [], [], []
         # flattern
-        captions, images, indices = [], [], []
+        captions, images, indices, bboxes = [], [], [], []
         for instance in instances:
             patient_id = next(iter(instance.keys()))
             study_id = next(iter(instance[patient_id].keys()))
@@ -39,11 +75,20 @@ class GloriaCollateFn:
             dicom_id = next(iter(instance['images'].keys()))
             x = original_tensor_to_numpy_image(instance['images'][dicom_id])
             images.append(x)
-            captions.append(instance['sentence'] if 'sentence' in instance.keys() else instance['report'])
-        return self.get_batch(images, captions, instances=instances if self.include_instances else None)
+            if 'sentence' in instance.keys():
+                captions.append(instance['sentence'])
+                sent_info = instance['objects'][dicom_id]['sent_to_bboxes'][instance['sent_id']]
+                bboxes.append(sent_info['coords_original'])
+            else:
+                captions.append(instance['report'])
+        return self.get_batch(images, captions, instances=instances if self.include_instances else None, bboxes=bboxes if len(bboxes) > 0 else None)
 
-    def get_batch(self, images, captions, instances=None, sort=True):
+    def get_batch(self, images, captions, instances=None, sort=True, bboxes=None):
         imgs = self.process_img(images, self.device)
+        if bboxes is not None:
+            original_shapes = [img.shape for img in images]
+            new_shape = imgs[0, 0].shape
+            seg_labels = self.get_segmentation_labels(bboxes, original_shapes, new_shape, self.device)
         cap_return_dict = self.process_text(captions, self.device)
 
         # sort and add to dictionary
@@ -56,9 +101,20 @@ class GloriaCollateFn:
         return_dict = {k: v[sorted_cap_indices] for k, v in cap_return_dict.items() if k != "cap_lens"}
         return_dict["cap_lens"] = sorted_cap_lens
         return_dict["imgs"] = imgs[sorted_cap_indices]
+        if bboxes is not None:
+            return_dict["segmentation_labels"] = seg_labels[sorted_cap_indices]
         if instances is not None:
             return_dict['instances'] = [instances[i] for i in sorted_cap_indices]
         return return_dict
+
+    def get_segmentation_labels(self, bboxes, original_shapes, new_shape, device):
+        seg_labels = []
+        for bbs, original_shape in zip(bboxes, original_shapes):
+            new_bbs = process_bboxes([original_shape for bb in bbs], bbs, self)
+            segmentation_label = sent_bboxes_to_segmentation_label(new_shape, new_bbs)
+            seg_labels.append(segmentation_label)
+        seg_labels = torch.stack(seg_labels, 0)
+        return seg_labels.to(device)
 
     # almost completely copied from gloria method
     def process_img(self, images, device):

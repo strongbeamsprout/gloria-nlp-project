@@ -849,7 +849,7 @@ class ImaGenomeDataset(MimicCxr):
     def __init__(self, df, mimic_cxr_filer, imagenome_filer, group_by='sentence', gold=False, randomize_reports=False,
                  randomize_objects_mode=None, sentences_df=None, sentence_selector=None, swap_left_right=False,
                  swap_left_right_coords=False, generate_sent=False, swap_conditions=False, valid_locations_conditions=None,
-                 text_masker=None, prob_of_masking=.5):
+                 text_masker=None, prob_of_masking=.5, num_rand_sent=None):
         self.group_by_sentence = group_by == 'sentence'
         if self.group_by_sentence:
             group_by = 'image'
@@ -868,6 +868,10 @@ class ImaGenomeDataset(MimicCxr):
         if self.sentence_selector is not None:
             assert self.group_by_sentence
             self.sentences_df = self.sentences_df[self.sentences_df.apply(self.sentence_selector, axis=1)]
+        self.num_rand_sent = num_rand_sent
+        if self.num_rand_sent is not None:
+            assert self.group_by_sentence
+            self.sentences_df = self.sentences_df.sample(self.num_rand_sent)
         self.swap_left_right = swap_left_right
         if self.swap_left_right:
             assert self.group_by_sentence
@@ -1077,7 +1081,7 @@ class ImaGenomeDataModule(BaseDataModule):
                  limit_to=None, randomize_reports=False, randomize_objects_mode=None, swap_left_right=False,
                  generate_sent=False, swap_conditions=False, mask_mode=None, mask_token='[MASK]', mask_prob=.5,
                  prob_of_masking=.5,
-                 group_by='sentence', **kwargs):
+                 group_by='sentence', num_rand_sent=None, **kwargs):
         super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn, **kwargs)
         self.mimic_cxr_filer = mimic_cxr_filer
         self.imagenome_filer = imagenome_filer
@@ -1223,6 +1227,10 @@ class ImaGenomeDataModule(BaseDataModule):
             kwargs['sentence_selector'] = None
         elif kwargs['limit_to'] == 'abnormal':
             kwargs['sentence_selector'] = RowLabelAndContextSelector(contains={('abnormal', 'yes')})
+        elif kwargs['limit_to'].startswith('num_rand_sent'):
+            kwargs['num_rand_sent'] = int(kwargs['limit_to'].split(':')[1])
+        elif kwargs['limit_to'].startswith('per_condition_num_rand_sent'):
+            kwargs['per_condition_num_rand_sent'] = int(kwargs['limit_to'].split(':')[1])
         else:
             raise Exception
         del kwargs['limit_to']

@@ -90,6 +90,15 @@ def get_parser():
         type=float,
         default=None
     )
+    parser.add_argument(
+        "--resume", action="store_true", default=False, help="specify whether to resume training from checkpoint"
+    )
+    parser.add_argument(
+        "--train_last_local_image_layer", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--train_prompt", action="store_true", default=False
+    )
     parser = Trainer.add_argparse_args(parser)
 
     return parser
@@ -101,7 +110,8 @@ def main(cfg, args):
     dm = gloria.builder.build_data_module(cfg)
 
     # define lightning module
-    model = gloria.builder.build_lightning_model(cfg, dm)
+    model = gloria.builder.build_lightning_model(
+        cfg, dm, ckpt=args.ckpt_path if not args.resume else None)
 
     # logging
     if "logger" in cfg.lightning:
@@ -153,6 +163,16 @@ def main(cfg, args):
         model.lr = new_lr
         print("=" * 80 + f"\nLearning rate updated to {new_lr}\n" + "=" * 80)
 
+    if cfg.model.train_last_local_image_layer or cfg.model.train_prompt:
+        for p in model.parameters():
+            p.requires_grad = False
+        if cfg.model.train_last_local_image_layer:
+            for p in model.gloria.img_encoder.model.layer3.parameters():
+                p.requires_grad = True
+        if cfg.model.train_prompt:
+            for p in model.gloria.text_encoder.model.embeddings.parameters():
+                p.requires_grad = True
+
     if args.train:
         trainer.fit(model, dm)
     if args.val or args.test:
@@ -160,6 +180,7 @@ def main(cfg, args):
             evaluate_localization.val_save_full_data = True
         ckpt_path = (
             checkpoint_callback.best_model_path if args.train else cfg.model.checkpoint
+            if args.ckpt_path is None else args.ckpt_path
         )
         print('loading from checkpoint:', ckpt_path)
         model = model.__class__.load_from_checkpoint(ckpt_path, cfg=cfg)
@@ -187,7 +208,7 @@ if __name__ == "__main__":
         cfg.data.mask_mode = args.mask_mode
     if args.mask_prob is not None:
         cfg.data.mask_prob = args.mask_prob
-    if args.ckpt_path is not None:
+    if args.ckpt_path is not None and args.resume:
         cfg.lightning.trainer.resume_from_checkpoint = args.ckpt_path
     cfg.model.gloria.no_attn_vec = args.no_attn_vec
     if args.no_attn_loss_weight is not None:
@@ -200,6 +221,8 @@ if __name__ == "__main__":
         cfg.model.gloria.global_loss_weight = args.global_loss_weight
     if args.gradient_clip_val != 0:
         cfg.lightning.trainer.gradient_clip_val = args.gradient_clip_val
+    cfg.model.gloria.train_last_local_image_layer = args.train_last_local_image_layer
+    cfg.model.gloria.train_prompt = args.train_prompt
 
     # edit experiment name
     cfg.data.frac = args.train_pct

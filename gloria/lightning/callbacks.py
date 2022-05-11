@@ -40,7 +40,11 @@ class Metrics:
         segmentation_label = sent_bboxes_to_segmentation_label(attn_overlay.shape, bboxes)
         for k, v in self.attn_bbox_metrics.items():
             if segmentation_label.sum() > 0:
-                metrics[k] = v(attn_overlay.reshape(-1), segmentation_label.reshape(-1).long())
+                try:
+                    metrics[k] = v(attn_overlay.reshape(-1), segmentation_label.reshape(-1).long())
+                except Exception as e:
+                    print(e)
+                    metrics[k] = None
             else:
                 metrics[k] = None
         total = np.prod(segmentation_label.shape)

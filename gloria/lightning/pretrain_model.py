@@ -57,8 +57,9 @@ class PretrainModel(LightningModule):
         """Similar to traning step"""
 
         img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents = self.gloria(batch)
+        seg_labels = batch['segmentation_labels'] if 'segmentation_labels' in batch.keys() else None
         loss, attn_maps = self.gloria.calc_loss(
-            img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents
+            img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents, seg_labels
         )
 
         # log training progress

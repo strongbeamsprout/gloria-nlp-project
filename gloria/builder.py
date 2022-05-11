@@ -17,9 +17,12 @@ def build_data_module(cfg):
     return data_module(cfg)
 
 
-def build_lightning_model(cfg, dm):
+def build_lightning_model(cfg, dm, ckpt=None):
     module = lightning.LIGHTNING_MODULES[cfg.phase.lower()]
-    module = module(cfg)
+    if ckpt is not None:
+        module = module.load_from_checkpoint(ckpt, cfg=cfg)
+    else:
+        module = module(cfg)
     module.dm = dm
     return module
 
@@ -59,10 +62,17 @@ def build_text_model(cfg):
 def build_optimizer(cfg, lr, model):
 
     # get params for optimization
-    params = []
-    for p in model.parameters():
-        if p.requires_grad:
-            params.append(p)
+    if cfg.model.train_last_local_image_layer or cfg.model.train_prompt:
+        params = []
+        if cfg.model.train_last_local_image_layer:
+            params += model.img_encoder.model.layer3.parameters()
+        if cfg.model.train_prompt:
+            params += model.text_encoder.model.embeddings.parameters()
+    else:
+        params = []
+        for p in model.parameters():
+            if p.requires_grad:
+                params.append(p)
 
     # define optimizers
     if cfg.train.optimizer.name == "SGD":

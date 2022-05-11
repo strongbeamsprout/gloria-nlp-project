@@ -68,6 +68,7 @@ class GLoRIA(nn.Module):
         self.no_attn_loss_weight = self.cfg.model.gloria.no_attn_loss_weight
         self.attention_divergence_loss_weight = self.cfg.model.gloria.attention_divergence_loss_weight
         self.attention_entropy_loss_weight = self.cfg.model.gloria.attention_entropy_loss_weight
+        self.segmentation_loss_weight = self.cfg.model.gloria.segmentation_loss_weight
 
         self.temp1 = self.cfg.model.gloria.temp1
         self.temp2 = self.cfg.model.gloria.temp2
@@ -128,32 +129,23 @@ class GLoRIA(nn.Module):
     def _calc_attn_loss(attn_maps, attn_labels):
         raise NotImplementedError
 
-    def calc_loss(self, img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents, attn_labels=None):
-
+    def calc_loss(self, img_emb_l, img_emb_g, text_emb_l, text_emb_g, sents, segmentation_labels=None):
+        # weighted loss
+        loss = 0
         l_loss0, l_loss1, no_attn_loss, kl_loss, entropy_loss, attn_maps = self._calc_local_loss(
             img_emb_l, text_emb_l, sents,
         )
-
-        # weighted loss
-        loss = 0
-        loss += (l_loss0 + l_loss1) * self.local_loss_weight
+        if self.local_loss_weight != 0:
+            loss += (l_loss0 + l_loss1) * self.local_loss_weight
         if self.global_loss_weight != 0:
             g_loss0, g_loss1 = self._calc_global_loss(img_emb_g, text_emb_g)
             loss += (g_loss0 + g_loss1) * self.global_loss_weight
+        if segmentation_labels is not None and self.segmentation_loss_weight:
+            mean_attn_maps = torch.cat([attn_map.mean(1) for attn_map in attn_maps], 0)
+            mean_upsampled_attn_maps = nn.functional.interpolate(mean_attn_maps.unsqueeze(1), size=segmentation_labels.shape[1:]).squeeze(1)
+            mean_upsampled_attn_maps = mean_upsampled_attn_maps / mean_upsampled_attn_maps.sum(-1, keepdims=True).sum(-2, keepdims=True)
+            loss += -torch.log((segmentation_labels * mean_upsampled_attn_maps).sum(-1).sum(-1)).mean() * self.segmentation_loss_weight
         loss += no_attn_loss + kl_loss + entropy_loss
-
-#        if self.sparse_attn_loss_weight is not None:
-#            avg_attn_entropy = []
-#            for am in attn_maps:
-#                am_mean = am[0].mean(0).reshape(-1)
-#                # note if no-attn is not turned on, this makes no difference because 1 - am_mean.sum() = 0
-#                am_mean = torch.cat([1 - am_mean.sum(), am_mean], 0)
-#                avg_attn_entropy.append(Categorical(am_mean).entropy())
-#            sparsity_regularization = sum(avg_attn_entropy) / len(avg_attn_entropy)
-#            loss += sparsity_regularization * self.sparse_attn_loss_weight
-#         if self.attn_loss_weight is not None:
-#             assert attn_label is not None
-#             loss += self._calc_attn_loss(attn_maps, attn_labels) * self.attn_loss_weight
 
         return loss, attn_maps
 
