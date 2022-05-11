@@ -89,6 +89,7 @@ class OnDelete:
         self.sent_id = sent_id
         self.ckpt_name = ckpt_name
         self.file = file
+
     def __call__(self):
         self.df = self.df[(self.df.dicom_id != self.dicom_id) | (self.df.sent_id != self.sent_id) | (self.df.checkpoint_name != self.ckpt_name)]
         self.df.to_csv(self.file, index=False)
@@ -212,6 +213,7 @@ with col1:
             prompt = st.text_area('Enter text prompt here.')
         else:
             prompt = sentence
+    st.markdown('**Prompt**: ' + prompt)
     with st.expander('Annotate', expanded=True):
         if annotations_name != "":
             st.write('Annotations: ' + annotations_name)
@@ -227,23 +229,24 @@ with col1:
             relevant_rows = df[(df.dicom_id == dicom_id) & (df.sent_id == sent_id) & (df.checkpoint_name == checkpoint_name)]
             if len(relevant_rows) > 0:
                 st.write('Current annotation:')
-                st.write('Is correct: %s' % relevant_rows.iloc[0].is_correct)
-                st.write('Is useful: %s' % relevant_rows.iloc[0].is_useful)
-                st.write('Is precise: %s' % relevant_rows.iloc[0].is_precise)
+                st.write('Has good recall? %s' % relevant_rows.iloc[0].has_good_recall)
+                st.write('Has bad precision? %s' % relevant_rows.iloc[0].has_bad_precision)
+                st.write('Is intuitive? %s' % relevant_rows.iloc[0].is_intuitive)
                 ondelete = OnDelete(df, dicom_id, sent_id, checkpoint_name, file)
                 st.button('delete', on_click=ondelete)
-            is_correct = st.select_slider('Does this heatmap correctly identify the region(s) of interest reffered to in the text?',
+            has_good_recall = st.select_slider('Is the region of interest from the prompt in the heatmap?',
                 options=['no', 'partially', 'yes'],
-                key='correct %s %s %s' % (dicom_id, sent_id, checkpoint_name))
-            is_useful = st.select_slider('Is this heatmap useful?',
+                key='good recall %s %s %s' % (dicom_id, sent_id, checkpoint_name))
+            has_bad_precision = st.select_slider('Does the heatmap contain irrelevant regions?',
                 options=['no', 'partially', 'yes'],
-                key='useful %s %s %s' % (dicom_id, sent_id, checkpoint_name))
-            is_precise = st.select_slider('Is this heatmap precise? In other words, does this heatmap focus on a small region?',
+                key='bad precision %s %s %s' % (dicom_id, sent_id, checkpoint_name))
+            is_intuitive = st.select_slider('Is this heatmap intuitive?',
                 options=['no', 'partially', 'yes'],
-                key='precise %s %s %s' % (dicom_id, sent_id, checkpoint_name))
+                key='intuitive %s %s %s' % (dicom_id, sent_id, checkpoint_name))
             new_row = {'dicom_sent_id': 'dicom_%s_sent_%s' % (dicom_id, sent_id), 'dicom_id': dicom_id, 'sent_id': sent_id,
-                       'checkpoint_name': checkpoint_name, 'prompt': prompt, 'is_correct': is_correct, 'is_useful': is_useful,
-                       'is_precise': is_precise, 'is_custom_prompt': custom_prompt}
+                       'checkpoint_name': checkpoint_name, 'prompt': prompt, 'has_good_recall': has_good_recall,
+                       'has_bad_precision': has_bad_precision,
+                       'is_intuitive': is_intuitive, 'is_custom_prompt': custom_prompt}
             onsubmit = OnSubmit(df, dicom_id, sent_id, checkpoint_name, new_row, file)
             st.button('submit', on_click=onsubmit, disabled=prompt == "")
     if annotations_name != "":
@@ -292,5 +295,4 @@ with col2:
     st.image(
         numpy_image,
         use_column_width='always')
-    st.markdown('**Prompt**: ' + prompt)
 print("done")
