@@ -1,0 +1,48 @@
+instructions
+
+### Instructions
+
+We would like to annotate some examples of heatmaps output by some unsupervised (or minimally supervised) models that try to explain the alignment between a natural langauge sentence and an Chest X-ray.
+We ask 3 questions to you, the annotator, to asses these models' heatmaps, and each question can have an answer of either “no,” “partially,” or “yes.”
+In each round of annotation collection, we are hoping to collect annotations for multiple models on the same prompts simultaneously.
+The model names are blinded from you, and the aliases of the models are randomly swapped each time you select a new instance.
+
+#### Prompts
+
+You can choose the natural language sentences fed to the model, which we refer to as “prompts,” by either selecting a sentence from the list of sentences in the associated radiology report or by writing your own “custom” prompt.
+We will do one round of annotations for report sentences and one round for the custom prompts.
+For the report sentences round, you will select one sentence that you think is interesting (prior to looking at any heatmaps) from the list of report sentences.
+You will then annotate all models on this sentence.
+For the custom annotations, you will propose one sentence to use as a prompt that talks about a feature of the image, and then annotate all models on this sentence.
+
+#### Annotations
+
+Bellow we list the questions and what each of the possible answers would mean.
+1. **Does this heatmap correctly identify the region(s) of interest reffered to in the text?**
+    * “yes” -- It is clear that the heatmap is mostly on the part of the image that you would say is the “ground truth” of what the sentence refers to, and does not focus on parts of the image that the sentence does not talk about.
+    * “partially” -- The heatmap is generally focused on the right part of the image, but either the heatmap is not precise enough to warrant a “yes” or there are some small number of high intensity parts of the heatmap over an incorrect region.
+    * “no” -- The heatmap is all over the place or focused entirely on the wrong part of the image.
+2. **Is this heatmap useful?**
+    * “yes” -- If you were looking to validate what the text was talking about, it would be useful to see this heatmap to make it easier to determine where to look.
+    * “partially” -- It might be helpful, but the vagueness of the heatmap makes it less useful or it is unclear from the heatmap exactly which part is most important.
+    * “no” -- It is totally incorrect or does not give any insight into where to look.
+3. **Is this heatmap precise? In other words, does this heatmap focus on a small region?**
+    * “yes” -- This heatmap highlights one very specific and small region of the image
+    * “partially” -- The focus is one small region but other regions are highlighted, or it focuses on one region, but the region is not that small.
+    * “no” -- The heatmap is all over the place or highlights a large portion of the image.
+
+#### Important Notes
+
+**Ground truth bounding boxes**: You have the ability to see the ground truth bounding boxes from the dataset associated with the particular sentence you have selected from the report. We suggest that you use these bounding boxes when annotating the heatmaps associated with the report sentences. These are of course unavailable for custom prompts.
+
+**Adjusting the attention strength**: You will need to adjust the strength of the visibility of the attention depending on the model or the instance so that you can properly see the heatmap before annotating it.
+
+**Examples**: Below we show some examples of image-text-heatmap examples and our suggested annotations for these so you can get a better idea what we are looking for.
+-
+right_broad_cap
+
+For this attention (assuming the bounding boxes are correct) we might annotate “yes” for if it is correct, but we might put “no” for if it is useful and/or precise because the spread is kind of large.
+-
+wrong_precise_cap
+
+However, on this example, the attention looks very focused, but it seems to be focused on the wrong part of the image, so we might put “no” for if it is correct and/or useful and “yes” for if it is precise.
