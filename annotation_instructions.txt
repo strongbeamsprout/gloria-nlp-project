@@ -36,10 +36,18 @@ Bellow we list the questions and what each of the possible answers would mean.
 
 **Examples**: Below we provide some examples of image-text-heatmap examples and our suggested annotations for these so you can get a better idea what we are looking for.
 -
-right_broad_cap
+yes_yes_yes
 
-For this attention (assuming the bounding boxes are correct) we might annotate “yes” for if it is correct, but we might put “no” for if it is useful and/or precise because the spread is kind of large.
+(1) yes, (2) yes, (3) yes
 -
-wrong_precise_cap
+no_no_yes
 
-However, on this example, the attention looks very focused, but it seems to be focused on the wrong part of the image, so we might put “no” for if it is correct and/or useful and “yes” for if it is precise.
+(1) no, (2) no, (3) yes
+-
+partially_partially_partially
+
+(1) partially, (2) partially, (3) partially
+-
+no_partially_partially
+
+(1) no, (2) partially, (3) partially

@@ -9,6 +9,7 @@ import pandas as pd
 import tokenizers
 from gloria.datasets.mimic_data import RowLabelAndContextSelector
 import copy
+from PIL import Image
 
 
 def process_bboxes(image_shapes, bboxes, collatefn):
@@ -181,17 +182,30 @@ with st.expander('Annotation Instructions', expanded=True):
             key = splitsec[0].strip()
             text = '\n\n'.join(splitsec[1:]).strip()
             sections[key] = text
-    right_broad_cap = sections['right_broad_cap']
-    del sections['right_broad_cap']
-    wrong_precise_cap = sections['wrong_precise_cap']
-    del sections['wrong_precise_cap']
+    yes_yes_yes = sections['yes_yes_yes']
+    del sections['yes_yes_yes']
+    no_no_yes = sections['no_no_yes']
+    del sections['no_no_yes']
+    partially_partially_partially = sections['partially_partially_partially']
+    del sections['partially_partially_partially']
+    no_partially_partially = sections['no_partially_partially']
+    del sections['no_partially_partially']
     for key, text in sections.items():
         st.markdown(text)
     col1, col2 = st.columns(2)
     with col1:
-        st.write(right_broad_cap)
+        st.image(Image.open('yes_yes_yes.png'))
+        st.write(yes_yes_yes)
     with col2:
-        st.write(wrong_precise_cap)
+        st.image(Image.open('no_no_yes.png'))
+        st.write(no_no_yes)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.image(Image.open('partially_partially_partially.png'))
+        st.write(partially_partially_partially)
+    with col2:
+        st.image(Image.open('no_partially_partially.png'))
+        st.write(no_partially_partially)
 with st.expander('Full Report', expanded=False):
     st.write(instance[patient_id][study_id]['report'])
 col1, col2 = st.columns(2)
@@ -201,7 +215,8 @@ with col1:
         if os.path.exists(file):
             df = get_annotations(file)
         else:
-            df = pd.DataFrame([], columns=['dicom_sent_id', 'dicom_id', 'sent_id', 'checkpoint_name', 'prompt', 'rating', 'is_custom_prompt'])
+            df = pd.DataFrame([], columns=['dicom_sent_id', 'dicom_id', 'sent_id', 'checkpoint_name', 'prompt',
+                                           'has_good_recall', 'has_bad_precision', 'is_intuitive', 'is_custom_prompt'])
         sent_info = instance[patient_id][study_id]['objects'][dicom_id]['sent_to_bboxes']
         relevant_rows = df[(df.dicom_id == dicom_id) & (df.checkpoint_name == checkpoint_name)]
         sent_id_is_annotated = {k: len(relevant_rows[relevant_rows.sent_id == k]) > 0 for k in sent_info.keys()}
@@ -295,4 +310,5 @@ with col2:
     st.image(
         numpy_image,
         use_column_width='always')
+    st.markdown('**Prompt**: ' + prompt)
 print("done")
