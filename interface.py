@@ -208,21 +208,40 @@ with st.expander('Annotation Instructions', expanded=True):
         st.write(no_partially_partially)
 with st.expander('Full Report', expanded=False):
     st.write(instance[patient_id][study_id]['report'])
+file = 'annotations/' + annotations_name + '.csv'
+if os.path.exists(file):
+    df = get_annotations(file)
+else:
+    df = pd.DataFrame([], columns=['dicom_sent_id', 'dicom_id', 'sent_id', 'checkpoint_name', 'prompt',
+                                   'has_good_recall', 'has_bad_precision', 'is_intuitive', 'is_custom_prompt'])
+if annotations_name != "":
+    with st.expander('Current Annotations', expanded=False):
+        current_annotations = []
+        rows = df[df.dicom_id == dicom_id]
+        prompts = set(rows.prompt)
+        for prompt in prompts:
+            current_annotations.append({
+                'prompt': prompt
+            })
+            for alias in sorted(list(aliases)):
+                m = alias_to_model[alias]
+                rs = rows[(rows.checkpoint_name == m) & (rows.prompt == prompt)]
+                if len(rs) == 1:
+                    current_annotations[-1][alias] = 'X'
+                else:
+                    current_annotations[-1][alias] = ''
+        st.write(pd.DataFrame(current_annotations))
 col1, col2 = st.columns(2)
 with col1:
     with st.expander('Prompt', expanded=True):
-        file = 'annotations/' + annotations_name + '.csv'
-        if os.path.exists(file):
-            df = get_annotations(file)
-        else:
-            df = pd.DataFrame([], columns=['dicom_sent_id', 'dicom_id', 'sent_id', 'checkpoint_name', 'prompt',
-                                           'has_good_recall', 'has_bad_precision', 'is_intuitive', 'is_custom_prompt'])
         sent_info = instance[patient_id][study_id]['objects'][dicom_id]['sent_to_bboxes']
         relevant_rows = df[(df.dicom_id == dicom_id) & (df.checkpoint_name == checkpoint_name)]
         sent_id_is_annotated = {k: len(relevant_rows[relevant_rows.sent_id == k]) > 0 for k in sent_info.keys()}
         custom_prompt = st.checkbox('Custom Prompt')
-        format_func = lambda k: sent_info[k]['sentence'] + (' (annotated)' if sent_id_is_annotated[k] else '')
-        sent_id = st.radio('Report Sentences', list(sent_info.keys()), disabled=custom_prompt, format_func=format_func)
+#        format_func = lambda k: sent_info[k]['sentence'] + (' (annotated)' if sent_id_is_annotated[k] else '')
+        format_func = lambda k: sent_info[k]['sentence']
+        sent_id = st.radio('Report Sentences', list(sent_info.keys()), disabled=custom_prompt, format_func=format_func,
+                           key='report sentences %s' % dicom_id)
         sentence = sent_info[sent_id]['sentence']
         if custom_prompt:
             prompt = st.text_area('Enter text prompt here.')
@@ -264,14 +283,6 @@ with col1:
                        'is_intuitive': is_intuitive, 'is_custom_prompt': custom_prompt}
             onsubmit = OnSubmit(df, dicom_id, sent_id, checkpoint_name, new_row, file)
             st.button('submit', on_click=onsubmit, disabled=prompt == "")
-    if annotations_name != "":
-        with st.expander('All Annotations', expanded=False):
-            if anonymize_models:
-                df_without_checkpoint = df.copy()
-                del df_without_checkpoint['checkpoint_name']
-                st.write(df_without_checkpoint)
-            else:
-                st.write(df)
 with col2:
     original_image = instance[patient_id][study_id]['images'][dicom_id]
     original_image = original_tensor_to_numpy_image(original_image)
@@ -311,4 +322,12 @@ with col2:
         numpy_image,
         use_column_width='always')
     st.markdown('**Prompt**: ' + prompt)
+if annotations_name != "":
+    with st.expander('All Annotations', expanded=False):
+        if anonymize_models:
+            df_without_checkpoint = df.copy()
+            del df_without_checkpoint['checkpoint_name']
+            st.write(df_without_checkpoint)
+        else:
+            st.write(df)
 print("done")
