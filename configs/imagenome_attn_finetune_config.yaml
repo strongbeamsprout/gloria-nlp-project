@@ -5,7 +5,7 @@ random_seed: 0
 lightning:
     trainer:
         gpus: '0'
-        max_epochs: 100
+        max_epochs: 500
         distributed_backend: 'dp'
         gradient_clip_val: 0.25
         lr: 0.00005
@@ -26,13 +26,12 @@ lightning:
     checkpoint_callback:
         monitor: 'val_loss'
         dirpath: '/scratch/mcinerney.de/gloria_outputs8/ckpt'
-        save_last: true 
+        save_last: true
         mode: min
-        save_top_k: 10
     early_stopping_callback:
         monitor: 'val_loss'
         min_delta: 0.00
-        patience: 10
+        patience: 25
         verbose: false
         mode: 'min'
     logger:

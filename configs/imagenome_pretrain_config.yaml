@@ -93,7 +93,7 @@ data:
     randomize_reports: false
     group_by: 'sentence'
 #     randomize_objects_mode: 'random_sentences'
-    limit_to: 'abnormal'
+#    limit_to: 'abnormal'
 #    mask_mode: 'word'
 #    mask_prob: .3
     prob_of_masking: 1

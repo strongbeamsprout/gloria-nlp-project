@@ -12,10 +12,14 @@ module load anaconda3/3.7
 module load cuda/10.2
 module load discovery/2019-02-21
 source activate gloria
-#python run.py -c configs/imagenome_attn_finetune_config.yaml --train --attention_entropy_loss_weight 1.0 --random_seed=0
-python run.py -c configs/imagenome_pretrain_config.yaml --train --random_seed=0
-#    --ckpt_path=/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_05_09_00_04_46/last.ckpt
+python run.py -c configs/imagenome_pretrain_config.yaml --train --no_attn_vec --attention_entropy_loss_weight 1.0 --attention_divergence_loss_weight .1 --random_seed=0 \
+    --ckpt_path=/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_05_12_17_16_47/last.ckpt --resume
+#    --ckpt_path=/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_05_10_08_31_14/last.ckpt --resume
 
+#    --ckpt_path=/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_05_09_00_04_46/last.ckpt
+#    'noattn_entropy_kl.1': '/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_05_10_11_47_56/last.ckpt',
+#    'abnormal': '/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_05_11_11_09_48/last.ckpt',
+#    'noattn': '/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_05_10_08_31_14/last.ckpt',
 #python test_data.py
 
 

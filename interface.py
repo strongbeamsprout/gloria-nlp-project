@@ -27,20 +27,19 @@ def process_bboxes(image_shapes, bboxes, collatefn):
 checkpoints = {
     'pretrained': 'pretrained/pretrained.ckpt',
     'baseline': 'pretrained/baseline_2022_04_20_09_25_42_epoch14.ckpt',
+    'wordmask': 'pretrained/wordmask_2022_04_19_15_45_33_epoch17.ckpt',
+    'clinicalmask': 'pretrained/clinicalmask_2022_04_24_10_17_44_epoch16.ckpt',
+    'abnormal': 'pretrained/abnormal_2022_05_13_19_21_55_epoch20.ckpt',
+    'noattn': 'pretrained/noattn_2022_05_16_09_57_38_epoch14.ckpt',
+    'baseline_supervised': 'pretrained/baseline_supervised_2022_05_17_01_34_49_epoch_last.ckpt',
+
+#    'pretrained_supervised': 'pretrained/pretrained_supervised_2022_05_16_19_55_10_epoch_last.ckpt',
 #    'noattn_entropy': 'pretrained/noattn_entropy_2022_05_06_00_57_04_epoch18.ckpt',
 #    'noattn_noattnloss_entropy': 'pretrained/noattn_noattnloss_entropy_2022_05_06_00_58_48_epoch17.ckpt',
 #    'noattn_entropy_kl': 'pretrained/noattn_entropy_kl_2022_05_06_11_34_25_epoch13.ckpt',
-    'wordmask': 'pretrained/wordmask_2022_04_19_15_45_33_epoch17.ckpt',
-    'clinicalmask': 'pretrained/clinicalmask_2022_04_24_10_17_44_epoch16.ckpt',
-#    'pretrained_finetuned': 'pretrained/pretrained_segfinetune30_2022_05_10_02_07_19_last.ckpt',
-#    'noattn_entropy_kl.1': '/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_05_09_00_03_47/last.ckpt',
-#    'onlylocal': '/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_05_09_00_04_46/last.ckpt',
+#    'onlylocal': 'pretrained/onlylocal_2022_05_10_19_27_18_epoch11.ckpt',
 
-#    'no_attn': '/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_04_29_10_46_53/epoch=0-step=3650.ckpt',
-#    'no_attn_low_entropy': '/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_04_27_13_33_00/last.ckpt',
-#    'gloria_pretrained': 'pretrained/chexpert_resnet50.ckpt',
-#    'gloria_retrained': 'pretrained/retrained_last_epoch16.ckpt',
-#    'clinical_masking': 'pretrained/retrained_masked_last_epoch25.ckpt'
+#    'noattn_entropy_kl.1': '/scratch/mcinerney.de/gloria_outputs7/ckpt/gloria_pretrain_1.0/2022_05_16_10_01_01/last.ckpt',
 }
 
 
@@ -192,18 +191,19 @@ with st.expander('Annotation Instructions', expanded=True):
     del sections['no_partially_partially']
     for key, text in sections.items():
         st.markdown(text)
-    col1, col2 = st.columns(2)
-    with col1:
+with st.expander('Examples', expanded=True):
+    instructions_col1, instructions_col2 = st.columns(2)
+    with instructions_col1:
         st.image(Image.open('yes_yes_yes.png'))
         st.write(yes_yes_yes)
-    with col2:
+    with instructions_col2:
         st.image(Image.open('no_no_yes.png'))
         st.write(no_no_yes)
-    col1, col2 = st.columns(2)
-    with col1:
+    instructions_col1, instructions_col2 = st.columns(2)
+    with instructions_col1:
         st.image(Image.open('partially_partially_partially.png'))
         st.write(partially_partially_partially)
-    with col2:
+    with instructions_col2:
         st.image(Image.open('no_partially_partially.png'))
         st.write(no_partially_partially)
 with st.expander('Full Report', expanded=False):
@@ -213,7 +213,8 @@ if os.path.exists(file):
     df = get_annotations(file)
 else:
     df = pd.DataFrame([], columns=['dicom_sent_id', 'dicom_id', 'sent_id', 'checkpoint_name', 'prompt',
-                                   'has_good_recall', 'has_bad_precision', 'is_intuitive', 'is_custom_prompt'])
+                                   'has_good_recall', 'has_good_precision', 'is_intuitive', 'is_custom_prompt',
+                                   'no_attn_score'])
 if annotations_name != "":
     with st.expander('Current Annotations', expanded=False):
         current_annotations = []
@@ -227,26 +228,31 @@ if annotations_name != "":
                 m = alias_to_model[alias]
                 rs = rows[(rows.checkpoint_name == m) & (rows.prompt == prompt)]
                 if len(rs) == 1:
-                    current_annotations[-1][alias] = 'X'
+                    current_annotations[-1][alias] = ', '.join(
+                        [str(rs.iloc[0].has_good_recall),
+                         str(rs.iloc[0].has_good_precision),
+                         str(rs.iloc[0].is_intuitive)])
                 else:
                     current_annotations[-1][alias] = ''
         st.write(pd.DataFrame(current_annotations))
-col1, col2 = st.columns(2)
-with col1:
-    with st.expander('Prompt', expanded=True):
-        sent_info = instance[patient_id][study_id]['objects'][dicom_id]['sent_to_bboxes']
-        relevant_rows = df[(df.dicom_id == dicom_id) & (df.checkpoint_name == checkpoint_name)]
-        sent_id_is_annotated = {k: len(relevant_rows[relevant_rows.sent_id == k]) > 0 for k in sent_info.keys()}
-        custom_prompt = st.checkbox('Custom Prompt')
-#        format_func = lambda k: sent_info[k]['sentence'] + (' (annotated)' if sent_id_is_annotated[k] else '')
-        format_func = lambda k: sent_info[k]['sentence']
-        sent_id = st.radio('Report Sentences', list(sent_info.keys()), disabled=custom_prompt, format_func=format_func,
-                           key='report sentences %s' % dicom_id)
-        sentence = sent_info[sent_id]['sentence']
-        if custom_prompt:
-            prompt = st.text_area('Enter text prompt here.')
-        else:
-            prompt = sentence
+with st.expander('Prompt', expanded=True):
+    sent_info = instance[patient_id][study_id]['objects'][dicom_id]['sent_to_bboxes']
+    relevant_rows = df[(df.dicom_id == dicom_id) & (df.checkpoint_name == checkpoint_name)]
+    sent_id_is_annotated = {k: len(relevant_rows[relevant_rows.sent_id == k]) > 0 for k in sent_info.keys()}
+    custom_prompt = st.checkbox('Custom Prompt')
+#    format_func = lambda k: sent_info[k]['sentence'] + (' (annotated)' if sent_id_is_annotated[k] else '')
+    format_func = lambda k: sent_info[k]['sentence']
+    sent_id = st.radio('Report Sentences', list(sent_info.keys()), disabled=custom_prompt, format_func=format_func,
+                       key='report sentences %s' % dicom_id)
+    sentence = sent_info[sent_id]['sentence']
+    if custom_prompt:
+        prompt = st.text_area('Enter text prompt here.')
+    else:
+        prompt = sentence
+#annotations_container = st.container()
+#image_container, attn_container = st.columns(2)
+annotations_container, image_container, attn_container = st.columns([2, 1, 1])
+with annotations_container:
     st.markdown('**Prompt**: ' + prompt)
     with st.expander('Annotate', expanded=True):
         if annotations_name != "":
@@ -263,27 +269,37 @@ with col1:
             relevant_rows = df[(df.dicom_id == dicom_id) & (df.sent_id == sent_id) & (df.checkpoint_name == checkpoint_name)]
             if len(relevant_rows) > 0:
                 st.write('Current annotation:')
-                st.write('Has good recall? %s' % relevant_rows.iloc[0].has_good_recall)
-                st.write('Has bad precision? %s' % relevant_rows.iloc[0].has_bad_precision)
-                st.write('Is intuitive? %s' % relevant_rows.iloc[0].is_intuitive)
+                st.write('Has good recall? %s' % str(relevant_rows.iloc[0].has_good_recall))
+                st.write('Has good precision? %s' % str(relevant_rows.iloc[0].has_good_precision))
+                st.write('Is intuitive? %s' % str(relevant_rows.iloc[0].is_intuitive))
                 ondelete = OnDelete(df, dicom_id, sent_id, checkpoint_name, file)
                 st.button('delete', on_click=ondelete)
-            has_good_recall = st.select_slider('Is the region of interest from the prompt in the heatmap?',
-                options=['no', 'partially', 'yes'],
+            choices = {1: '0-20', 2: '20-40', 3: '40-60', 4: '60-80', 5: '80-100'}
+            has_good_recall = st.radio('The heatmap includes what percentage of the region of interest from the prompt?',
+#                options=['no', 'partially', 'yes'],
+                options=[1, 2, 3, 4, 5],
+                format_func=lambda x: choices[x],
                 key='good recall %s %s %s' % (dicom_id, sent_id, checkpoint_name))
-            has_bad_precision = st.select_slider('Does the heatmap contain irrelevant regions?',
-                options=['no', 'partially', 'yes'],
+            has_good_precision = st.radio('What percentage of the heatmap represents an area of interest?',
+#                options=['no', 'partially', 'yes'],
+                options=[1, 2, 3, 4, 5],
+                format_func=lambda x: choices[x],
                 key='bad precision %s %s %s' % (dicom_id, sent_id, checkpoint_name))
-            is_intuitive = st.select_slider('Is this heatmap intuitive?',
-                options=['no', 'partially', 'yes'],
+            is_intuitive = st.radio('Rate how intuitive the heatmap is on a scale from 1-5 (1 being the worst, 5 being the best).',
+#                options=['no', 'partially', 'yes'],
+                options=[1, 2, 3, 4, 5],
                 key='intuitive %s %s %s' % (dicom_id, sent_id, checkpoint_name))
             new_row = {'dicom_sent_id': 'dicom_%s_sent_%s' % (dicom_id, sent_id), 'dicom_id': dicom_id, 'sent_id': sent_id,
                        'checkpoint_name': checkpoint_name, 'prompt': prompt, 'has_good_recall': has_good_recall,
-                       'has_bad_precision': has_bad_precision,
+                       'has_good_precision': has_good_precision,
                        'is_intuitive': is_intuitive, 'is_custom_prompt': custom_prompt}
-            onsubmit = OnSubmit(df, dicom_id, sent_id, checkpoint_name, new_row, file)
-            st.button('submit', on_click=onsubmit, disabled=prompt == "")
-with col2:
+            if not has_no_attn:
+                onsubmit = OnSubmit(df, dicom_id, sent_id, checkpoint_name, new_row, file)
+                st.button('submit', on_click=onsubmit, disabled=prompt == "")
+            else:
+                submit_button = st.empty()
+with image_container:
+    image_placeholder = st.empty()
     original_image = instance[patient_id][study_id]['images'][dicom_id]
     original_image = original_tensor_to_numpy_image(original_image)
     image = collate_fn.process_img([original_image], 'cpu')[0, 0]
@@ -307,8 +323,13 @@ with col2:
         attn_img, no_attn_score = get_attention(dicom_id, prompt, checkpoint_name)
         if has_no_attn:
             attn_img[-10:, -10:] = no_attn_score
-        attn_strength = st.select_slider('Display attention coefficient', options=[0., 1e1, 3e1, 1e2, 3e2, 1e3, 3e3, 1e4, 3e4, 1e5, 3e5, 1e6, 3e6, 1e7, 3e7, 1e8, 3e8, 1e9, 3e9, 1e10], value=1e5)
-        numpy_image = original_tensor_to_numpy_image(image + attn_strength * attn_img)
+            new_row['no_attn_score'] = no_attn_score
+            onsubmit = OnSubmit(df, dicom_id, sent_id, checkpoint_name, new_row, file)
+            submit_button.button('submit', on_click=onsubmit, disabled=prompt == "")
+        #attn_strength = st.select_slider('Display attention coefficient', options=[0., 1e1, 3e1, 1e2, 3e2, 1e3, 3e3, 1e4, 3e4, 1e5, 3e5, 1e6, 3e6, 1e7, 3e7, 1e8, 3e8, 1e9, 3e9, 1e10], value=1e5)
+        #numpy_image = original_tensor_to_numpy_image(image + attn_strength * attn_img)
+        numpy_image = original_tensor_to_numpy_image(image)
+        attn_numpy_image = original_tensor_to_numpy_image(attn_img)
     else:
         numpy_image = original_tensor_to_numpy_image(image)
     if not custom_prompt and show_bboxes:
@@ -318,10 +339,15 @@ with col2:
             return new_bboxes
         bboxes = get_bboxes(dicom_id, sent_id)
         numpy_image = draw_bounding_boxes(to_rgb(torch.tensor(numpy_image)), bboxes)
-    st.image(
+        if display_attn:
+            attn_numpy_image = draw_bounding_boxes(to_rgb(torch.tensor(attn_numpy_image)), bboxes)
+    image_placeholder.image(
         numpy_image,
         use_column_width='always')
     st.markdown('**Prompt**: ' + prompt)
+if display_attn:
+    with attn_container:
+        st.image(attn_numpy_image, use_column_width='always')
 if annotations_name != "":
     with st.expander('All Annotations', expanded=False):
         if anonymize_models:

@@ -63,16 +63,19 @@ def build_optimizer(cfg, lr, model):
 
     # get params for optimization
     if cfg.model.train_last_local_image_layer or cfg.model.train_prompt:
+        for p in model.parameters():
+            p.requires_grad = False
         params = []
         if cfg.model.train_last_local_image_layer:
             params += model.img_encoder.model.layer3.parameters()
         if cfg.model.train_prompt:
             params += model.text_encoder.model.embeddings.parameters()
-    else:
-        params = []
-        for p in model.parameters():
-            if p.requires_grad:
-                params.append(p)
+        for p in params:
+            p.requires_grad = True
+    params = []
+    for p in model.parameters():
+        if p.requires_grad:
+            params.append(p)
 
     # define optimizers
     if cfg.train.optimizer.name == "SGD":

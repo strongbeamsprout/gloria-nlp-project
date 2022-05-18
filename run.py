@@ -99,6 +99,20 @@ def get_parser():
     parser.add_argument(
         "--train_prompt", action="store_true", default=False
     )
+    parser.add_argument(
+        "--randomize_objects_mode",
+        type=str,
+        default=None
+    )
+    parser.add_argument(
+        "--swap_left_right", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--generate_sent", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--swap_conditions", action="store_true", default=False
+    )
     parser = Trainer.add_argparse_args(parser)
 
     return parser
@@ -110,6 +124,12 @@ def main(cfg, args):
     dm = gloria.builder.build_data_module(cfg)
 
     # define lightning module
+    if args.ckpt_path is not None:
+        cfg.ckpt_path = args.ckpt_path
+        if args.resume:
+            print('resuming from checkpoint:', args.ckpt_path)
+        else:
+            print('loading from checkpoint:', args.ckpt_path)
     model = gloria.builder.build_lightning_model(
         cfg, dm, ckpt=args.ckpt_path if not args.resume else None)
 
@@ -163,27 +183,24 @@ def main(cfg, args):
         model.lr = new_lr
         print("=" * 80 + f"\nLearning rate updated to {new_lr}\n" + "=" * 80)
 
-    if cfg.model.train_last_local_image_layer or cfg.model.train_prompt:
-        for p in model.parameters():
-            p.requires_grad = False
-        if cfg.model.train_last_local_image_layer:
-            for p in model.gloria.img_encoder.model.layer3.parameters():
-                p.requires_grad = True
-        if cfg.model.train_prompt:
-            for p in model.gloria.text_encoder.model.embeddings.parameters():
-                p.requires_grad = True
+    #if cfg.model.train_last_local_image_layer or cfg.model.train_prompt:
+    #    for p in model.parameters():
+    #        p.requires_grad = False
+    #    if cfg.model.train_last_local_image_layer:
+    #        for p in model.gloria.img_encoder.model.layer3.parameters():
+    #            p.requires_grad = True
+    #    if cfg.model.train_prompt:
+    #        for p in model.gloria.text_encoder.model.embeddings.parameters():
+    #            p.requires_grad = True
 
     if args.train:
         trainer.fit(model, dm)
     if args.val or args.test:
         if evaluate_localization is not None:
             evaluate_localization.val_save_full_data = True
-        ckpt_path = (
-            checkpoint_callback.best_model_path if args.train else cfg.model.checkpoint
-            if args.ckpt_path is None else args.ckpt_path
-        )
-        print('loading from checkpoint:', ckpt_path)
-        model = model.__class__.load_from_checkpoint(ckpt_path, cfg=cfg)
+        if args.train:
+            print('loading from best checkpoint:', checkpoint_callback.best_model_path)
+            model = model.__class__.load_from_checkpoint(checkpoint_callback.best_model_path, cfg=cfg)
         if args.val:
             trainer.validate(model=model, datamodule=dm)
         if args.test:
@@ -223,6 +240,12 @@ if __name__ == "__main__":
         cfg.lightning.trainer.gradient_clip_val = args.gradient_clip_val
     cfg.model.gloria.train_last_local_image_layer = args.train_last_local_image_layer
     cfg.model.gloria.train_prompt = args.train_prompt
+
+    if args.randomize_objects_mode is not None:
+        cfg.data.randomize_objects_mode = args.randomize_objects_mode
+    cfg.data.swap_left_right = args.swap_left_right
+    cfg.data.generate_sent = args.generate_sent
+    cfg.data.swap_conditions = args.swap_conditions
 
     # edit experiment name
     cfg.data.frac = args.train_pct

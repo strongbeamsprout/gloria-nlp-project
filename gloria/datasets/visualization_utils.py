@@ -558,8 +558,15 @@ def path_and_rows_to_info(path, rows=None):
         for k in ['image', 'attn', 'roc_curve', 'pr_curve']:
             if k not in info.keys():
                 info[k] = []
-            array = np.load(os.path.join(path, k, dicom_sent_id + '.npy'), allow_pickle=True)
-            info[k].append(array if array.ndim > 0 else None)
+            if k.endswith('_curve'):
+                array = np.load(os.path.join(path, k, dicom_sent_id + '.npz'), allow_pickle=True)
+                if len(array.files) == 0:
+                    array = None
+                else:
+                    array = (array['arr_0'], array['arr_1'], array['arr_2'])
+            else:
+                array = np.load(os.path.join(path, k, dicom_sent_id + '.npy'), allow_pickle=True)
+            info[k].append(array)
     return info
 
 

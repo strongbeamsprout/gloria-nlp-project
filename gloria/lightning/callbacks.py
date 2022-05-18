@@ -299,7 +299,12 @@ class EvaluateLocalization(Callback):
             if not os.path.exists(os.path.join(path, folder)):
                 os.mkdir(os.path.join(path, folder))
             for dicom_sent_id, x in zip(info['dicom_sent_id'], info[folder]):
-                np.save(os.path.join(path, folder, dicom_sent_id), x)
+                if folder.endswith('_curve'):
+                    if x is None:
+                        x = ()
+                    np.savez(os.path.join(path, folder, dicom_sent_id), *x)
+                else:
+                    np.save(os.path.join(path, folder, dicom_sent_id), x)
 
     def get_attn_overlay(self, attn, image_shape, mode='upsample'):
         attn = torch.tensor(attn)

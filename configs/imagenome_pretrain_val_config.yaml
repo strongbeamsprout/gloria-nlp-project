@@ -1,5 +1,6 @@
 experiment_name: 'gloria_pretrain'
 phase: 'pretrain'
+random_seed: 0
 
 lightning:
     trainer:
@@ -15,7 +16,7 @@ lightning:
         check_val_every_n_epoch: 1
     checkpoint_callback:
         monitor: 'val_loss'
-        dirpath: '/scratch/mcinerney.de/gloria_outputs6/ckpt'
+        dirpath: '/scratch/mcinerney.de/gloria_outputs9/ckpt'
         save_last: true 
         mode: min
         save_top_k: 10
@@ -28,7 +29,7 @@ lightning:
     logger:
         logger_type: 'WandbLogger'
         save_dir: '/scratch/mcinerney.de/gloria_outputs4/'
-        project: 'gloria_v6'
+        project: 'gloria_v9'
     evaluate_localization:
         eval_attn_overlay_mode: 'upsample'
         plot_attn_overlay_mode: 'upsample'
@@ -52,7 +53,7 @@ model:
 #    checkpoint: './pretrained/retrained_masked_epoch16.ckpt'
 #    checkpoint: './pretrained/retrained_masked_last_epoch25.ckpt'
 #    checkpoint: './pretrained/retrained_pos_last_epoch27.ckpt'
-    checkpoint: './pretrained/retrained_randsent_last_epoch10.ckpt'
+#    checkpoint: './pretrained/retrained_randsent_last_epoch10.ckpt'
 #    checkpoint: './pretrained/retrained_transformer_last_epoch19.ckpt'
     gloria:
         local_loss_weight: 1.0
@@ -101,12 +102,12 @@ data:
 #    randomize_objects_mode: 'shuffle_bboxes_sentences'
 #    randomize_objects_mode: 'random_bboxes'
 #    randomize_objects_mode: 'random_sentences'
-    swap_left_right: true
+    swap_left_right: false
     generate_sent: false
     swap_conditions: false
 #     mask_mode: 'clinical'
-    mask_prob: .5
-    prob_of_masking: .5
+#     mask_prob: .5
+#     prob_of_masking: .5
 
 transforms: 
     norm: 'half'
@@ -128,4 +129,4 @@ train:
         inerval: 'epoch'
         frequency: 1
 
-base_output_dir: '/scratch/mcinerney.de/gloria_outputs6/output'
+base_output_dir: '/scratch/mcinerney.de/gloria_outputs9/output'
