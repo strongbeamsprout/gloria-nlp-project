@@ -132,7 +132,7 @@ with st.sidebar:
             selector2 = RowBBoxSelector(contains={'left lung'}, does_not_contain={'right lung'})
             selector = lambda r: selector1(r) or selector2(r)
             sentences_df = sentences_df[sentences_df.apply(selector, axis=1)]
-        sentences_df = sentences_df.drop_duplicates('dicom_id')        
+        sentences_df = sentences_df.drop_duplicates('dicom_id')
         return sentences_df
     dataset.sentences_df = get_sentences(split, subset, dataset.sentences_df)
     data_size = len(dataset)
@@ -221,12 +221,14 @@ if annotations_name != "":
         rows = df[df.dicom_id == dicom_id]
         prompts = set(rows.prompt)
         for prompt in prompts:
+            prompt_rows = rows[rows.prompt == prompt]
             current_annotations.append({
-                'prompt': prompt
+                'prompt': prompt,
+                'custom?': '✓' if prompt_rows.iloc[0].is_custom_prompt else ''
             })
             for alias in sorted(list(aliases)):
                 m = alias_to_model[alias]
-                rs = rows[(rows.checkpoint_name == m) & (rows.prompt == prompt)]
+                rs = prompt_rows[prompt_rows.checkpoint_name == m]
                 if len(rs) == 1:
                     current_annotations[-1][alias] = ', '.join(
                         [str(rs.iloc[0].has_good_recall),
