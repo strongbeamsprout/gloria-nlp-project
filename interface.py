@@ -325,9 +325,10 @@ with image_container:
         attn_img, no_attn_score = get_attention(dicom_id, prompt, checkpoint_name)
         if has_no_attn:
             attn_img[-10:, -10:] = no_attn_score
-            new_row['no_attn_score'] = no_attn_score
-            onsubmit = OnSubmit(df, dicom_id, sent_id, checkpoint_name, new_row, file)
-            submit_button.button('submit', on_click=onsubmit, disabled=prompt == "")
+            if annotations_name != "":
+                new_row['no_attn_score'] = no_attn_score
+                onsubmit = OnSubmit(df, dicom_id, sent_id, checkpoint_name, new_row, file)
+                submit_button.button('submit', on_click=onsubmit, disabled=prompt == "")
         #attn_strength = st.select_slider('Display attention coefficient', options=[0., 1e1, 3e1, 1e2, 3e2, 1e3, 3e3, 1e4, 3e4, 1e5, 3e5, 1e6, 3e6, 1e7, 3e7, 1e8, 3e8, 1e9, 3e9, 1e10], value=1e5)
         #numpy_image = original_tensor_to_numpy_image(image + attn_strength * attn_img)
         numpy_image = original_tensor_to_numpy_image(image)
