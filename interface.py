@@ -10,6 +10,7 @@ import tokenizers
 from gloria.datasets.mimic_data import RowLabelAndContextSelector
 import copy
 from PIL import Image
+from torch import nn
 
 
 def process_bboxes(image_shapes, bboxes, collatefn):
@@ -110,7 +111,7 @@ class OnSubmit:
         self.df.to_csv(self.file, index=False)
 
 
-anonymize_models = True
+anonymize_models = False
 st.set_page_config(layout="wide")
 with st.sidebar:
     st.title('Exploring & Annotating GLoRIA Attention')
@@ -244,8 +245,11 @@ with st.expander('Prompt', expanded=True):
     custom_prompt = st.checkbox('Custom Prompt')
 #    format_func = lambda k: sent_info[k]['sentence'] + (' (annotated)' if sent_id_is_annotated[k] else '')
     format_func = lambda k: sent_info[k]['sentence']
-    sent_id = st.radio('Report Sentences', list(sent_info.keys()), disabled=custom_prompt, format_func=format_func,
-                       key='report sentences %s' % dicom_id)
+    sent_id = st.radio('Report Sentences', list(sent_info.keys()), format_func=format_func,
+                       key='report sentences %s' % dicom_id,
+#                       disabled=custom_prompt,
+                       )
+    bboxes_id = sent_id
     sentence = sent_info[sent_id]['sentence']
     if custom_prompt:
         prompt = st.text_area('Enter text prompt here.')
@@ -305,11 +309,13 @@ with image_container:
     original_image = instance[patient_id][study_id]['images'][dicom_id]
     original_image = original_tensor_to_numpy_image(original_image)
     image = collate_fn.process_img([original_image], 'cpu')[0, 0]
-    show_bboxes = st.checkbox('Show Bounding Boxes', disabled=custom_prompt)
+    show_bboxes = st.checkbox('Show Bounding Boxes',
+#                              disabled=custom_prompt,
+                             )
     display_attn = st.checkbox('Display Attention')
     if display_attn:
         @st.cache(allow_output_mutation=True, hash_funcs={tokenizers.Tokenizer: lambda x: 0})
-        def get_attention(image_id, prmpt, ckpt_name):
+        def get_attention(image_id, prmpt, ckpt_name, bilinear=False):
             if len(prmpt) == 0:
                 return torch.zeros_like(image), 0
             batch = collate_fn.get_batch(
@@ -320,9 +326,14 @@ with image_container:
             ams = model.gloria.get_attn_maps(img_emb_l, text_emb_l, sents)
             am = ams[0][0].mean(0).detach().cpu().numpy()
             no_attn = 1 - am.sum()
-            attn_img = pyramid_attn_overlay(am, (224, 224))
+            if bilinear:
+                am = torch.tensor(am)
+                attn_img = nn.Upsample(size=(224, 224))(am.reshape(1, 1, *am.shape))[0, 0]
+            else:
+                attn_img = pyramid_attn_overlay(am, (224, 224))
             return attn_img, no_attn
-        attn_img, no_attn_score = get_attention(dicom_id, prompt, checkpoint_name)
+        bilinear = st.checkbox('Bilinear')
+        attn_img, no_attn_score = get_attention(dicom_id, prompt, checkpoint_name, bilinear=bilinear)
         if has_no_attn:
             attn_img[-10:, -10:] = no_attn_score
             if annotations_name != "":
@@ -332,25 +343,50 @@ with image_container:
         #attn_strength = st.select_slider('Display attention coefficient', options=[0., 1e1, 3e1, 1e2, 3e2, 1e3, 3e3, 1e4, 3e4, 1e5, 3e5, 1e6, 3e6, 1e7, 3e7, 1e8, 3e8, 1e9, 3e9, 1e10], value=1e5)
         #numpy_image = original_tensor_to_numpy_image(image + attn_strength * attn_img)
         numpy_image = original_tensor_to_numpy_image(image)
+        rgb_image = to_rgb(torch.tensor(numpy_image))
         attn_numpy_image = original_tensor_to_numpy_image(attn_img)
+        attn_rgb_image = to_rgb(torch.tensor(attn_numpy_image))
+        attn_rgb_image = cv2.normalize(attn_rgb_image, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        attn_rgb_image = cv2.applyColorMap(attn_rgb_image, cv2.COLORMAP_OCEAN)
+        threshold_heatmap = st.checkbox('Threshold the heatmap')
+        if threshold_heatmap:
+            threshold = st.slider('threshold', float(attn_numpy_image.min()), float(attn_numpy_image.max()), .01)
+            attn_numpy_image = (attn_numpy_image > threshold).astype(float)
+            attn_rgb_image = to_rgb(torch.tensor(attn_numpy_image))
+            attn_rgb_image = cv2.normalize(attn_rgb_image, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+            attn_rgb_image = cv2.applyColorMap(attn_rgb_image, cv2.COLORMAP_OCEAN)
     else:
         numpy_image = original_tensor_to_numpy_image(image)
-    if not custom_prompt and show_bboxes:
+        rgb_image = to_rgb(torch.tensor(numpy_image))
+#    if not custom_prompt and show_bboxes:
+    if show_bboxes:
         def get_bboxes(image_id, sent_id):
             original_bboxes = sent_info[sent_id]['coords_original']
             new_bboxes = process_bboxes([original_image.shape] * len(original_bboxes), original_bboxes, collate_fn)
             return new_bboxes
-        bboxes = get_bboxes(dicom_id, sent_id)
-        numpy_image = draw_bounding_boxes(to_rgb(torch.tensor(numpy_image)), bboxes)
+        bboxes = get_bboxes(dicom_id, bboxes_id)
+        rgb_image = draw_bounding_boxes(rgb_image, bboxes, color=(0,150,0))
         if display_attn:
-            attn_numpy_image = draw_bounding_boxes(to_rgb(torch.tensor(attn_numpy_image)), bboxes)
+            if threshold_heatmap:
+                for bbox in bboxes:
+                    attn_rgb_image[bbox[1]:bbox[3], bbox[0]:bbox[2], 0] = 0
+                    attn_rgb_image[bbox[1]:bbox[3], bbox[0]:bbox[2], 2] = 0
+#                    attn_rgb_image[:bbox[1], :, 0] = 0
+#                    attn_rgb_image[bbox[3]:, :, 0] = 0
+#                    attn_rgb_image[:, :bbox[0], 0] = 0
+#                    attn_rgb_image[:, bbox[2]:, 0] = 0
+#                    attn_rgb_image[:bbox[1], :, 1] = 0
+#                    attn_rgb_image[bbox[3]:, :, 1] = 0
+#                    attn_rgb_image[:, :bbox[0], 1] = 0
+#                    attn_rgb_image[:, bbox[2]:, 1] = 0
+            rgb_numpy_image = draw_bounding_boxes(attn_rgb_image, bboxes, color=(0,150,0))
     image_placeholder.image(
-        numpy_image,
+        rgb_image,
         use_column_width='always')
     st.markdown('**Prompt**: ' + prompt)
 if display_attn:
     with attn_container:
-        st.image(attn_numpy_image, use_column_width='always')
+        st.image(attn_rgb_image, use_column_width='always')
 if annotations_name != "":
     with st.expander('All Annotations', expanded=False):
         if anonymize_models:
